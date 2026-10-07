@@ -160,3 +160,21 @@ At 18,886 assets:
 - These run on worker threads: `load()`, `poll()`, `thumbnail()`, `rebuild()` and threaded exporters. **Don't touch Qt widgets or host scene APIs in them.**
 - Anything that edits a Houdini, Nuke or Maya scene: register it with `threaded=False`.
 - The library is thread-safe for the gallery's own use: workers prepare items, and the GUI thread applies them.
+
+## 7. Look
+
+By default the gallery matches the application it runs in. Inside Houdini, Nuke or Maya it derives its colours from the host's Qt palette (window, panels, text, highlight) and keeps the host's font size. Standalone, it uses the built-in ILP look.
+
+```python
+from ilp_gallery.ui import ILP, Theme
+
+make_browser(theme="auto")                          # default: host look in a DCC, ILP standalone
+make_browser(theme="host")                          # always derive from the app's palette
+make_browser(theme="ilp")                           # always the ILP look
+make_browser(theme=ILP.replace(accent="#e08a3d"))   # any Theme; .replace() changes a few colours
+browser.set_theme("ilp")                            # switch live
+```
+
+`ILP_GALLERY_THEME=auto|host|ilp` overrides what `"auto"` picks; an explicit `theme=` argument still wins. `browser.theme` is the `Theme` in use.
+
+> The host looks were checked with palettes like Nuke's and Maya's, not inside the real applications yet.

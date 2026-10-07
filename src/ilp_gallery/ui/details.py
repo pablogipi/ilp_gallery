@@ -46,7 +46,8 @@ class DetailPanel(QWidget):
         self.item: GalleryItem | None = None
 
         self.player = PlayerWidget(cache)
-        self.player.canvas.background = theme.c(theme.IMAGE_BG)
+        self._theme = theme.ILP
+        self.player.canvas.background = self._theme.c("image_bg")
         self.player.setMinimumHeight(260)
         self.player.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
@@ -158,9 +159,16 @@ class DetailPanel(QWidget):
         self.sub.setText(f"{item.id if item.id != item.path else ''}   {subtitle(item)}".strip())
         self.info.setText(self._html(item))
 
+    def set_theme(self, t: theme.Theme) -> None:
+        self._theme = t
+        self.player.canvas.background = t.c("image_bg")
+        self.player.canvas.update()
+        if self.item is not None:
+            self.info.setText(self._html(self.item))
+
     def _html(self, it: GalleryItem) -> str:
-        link = theme.LINK
-        muted = theme.MUTED
+        link = self._theme.link
+        muted = self._theme.muted
         esc = html.escape
         parts = [f"<style>a {{ color: {link}; text-decoration: none; }} td {{ padding: 2px 14px 2px 0; }}"
                  f" .k {{ color: {muted}; }} h4 {{ margin: 12px 0 4px 0; }}</style>"]

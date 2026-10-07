@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.item import GalleryItem
-from . import theme
+from . import theme as theme_mod
 from .widget import GalleryWidget
 
 ORG, APP = "ILPvfx", "ILPGallery"
@@ -105,15 +105,18 @@ class LogPanel(QWidget):
 
 
 class GalleryBrowser(QMainWindow):
-    def __init__(self, parent: QWidget | None = None, **widget_kwargs) -> None:
+    def __init__(self, parent: QWidget | None = None, theme: "theme_mod.Theme | str | None" = None,
+                 **widget_kwargs) -> None:
+        """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
+        standalone), "host", "ilp" or a :class:`~ilp_gallery.ui.theme.Theme`."""
         super().__init__(parent)
         self.setObjectName("ILPGalleryRoot")
         self.setWindowTitle("ILP Gallery")
-        self.setStyleSheet(theme.STYLESHEET)
         self.setDockOptions(QMainWindow.AnimatedDocks)
 
-        self.gallery = GalleryWidget(parent=self, styled=False, **widget_kwargs)
+        self.gallery = GalleryWidget(parent=self, styled=False, theme=theme, **widget_kwargs)
         self.setCentralWidget(self.gallery)
+        self.setStyleSheet(self.theme.stylesheet())
         self.gallery.set_export_enabled(True)
         self.gallery.command_template = setting("export/command")
 
@@ -246,9 +249,18 @@ class GalleryBrowser(QMainWindow):
     def reload(self) -> None:
         self.gallery.reload()
 
+    @property
+    def theme(self) -> "theme_mod.Theme":
+        return self.gallery.theme
+
+    def set_theme(self, theme: "theme_mod.Theme | str | None") -> None:
+        """Switch colours live: "auto", "host", "ilp" or a Theme."""
+        self.gallery.set_theme(theme)
+        self.setStyleSheet(self.theme.stylesheet())
+
     def open_settings(self) -> None:
         dlg = SettingsDialog(self)
-        dlg.setStyleSheet(theme.STYLESHEET)
+        dlg.setStyleSheet(self.theme.stylesheet())
         if dlg.exec():
             self.gallery.command_template = setting("export/command")
             self.log(f"Export command: {self.gallery.command_template or '(none)'}")

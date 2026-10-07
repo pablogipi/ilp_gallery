@@ -32,12 +32,15 @@ class TileDelegate(QStyledItemDelegate):
         self.aspect = 16 / 9
         self.hover_id: str | None = None
         self.hover_fraction = 0.0
-        self._tile = theme.c(theme.TILE)
-        self._tile_hover = theme.c(theme.TILE_HOVER)
-        self._image_bg = theme.c(theme.IMAGE_BG)
-        self._accent = theme.c(theme.ACCENT)
-        self._text = theme.c(theme.TEXT)
-        self._muted = theme.c(theme.MUTED)
+        self.set_theme(theme.ILP)
+
+    def set_theme(self, t: theme.Theme) -> None:
+        self._tile = t.c("tile")
+        self._tile_hover = t.c("tile_hover")
+        self._image_bg = t.c("image_bg")
+        self._accent = t.c("accent")
+        self._text = t.c("text")
+        self._muted = t.c("muted")
 
     # -- geometry ------------------------------------------------------
     def image_height(self) -> int:

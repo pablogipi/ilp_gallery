@@ -30,7 +30,7 @@ from ..core.library import GalleryLibrary
 from ..core.source import DataSource, source_for_path
 from .actions import CommandExporter, DragHandler, Exporter, build_mime
 from ..media.thumbs import ThumbnailCache
-from . import theme
+from . import theme as theme_mod
 from .delegate import TileDelegate
 from .details import DetailPanel
 from .model import GalleryModel, ItemRole
@@ -78,13 +78,17 @@ class GalleryWidget(QWidget):
     def __init__(self, library: GalleryLibrary | None = None, cache: ThumbnailCache | None = None,
                  parent: QWidget | None = None, show_sidebar: bool = True,
                  show_details: bool = True, tile_aspect: float | None = None,
-                 styled: bool = True, **_ignored) -> None:
+                 styled: bool = True, theme: "theme_mod.Theme | str | None" = None,
+                 **_ignored) -> None:
+        """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
+        standalone), "host", "ilp" or a :class:`~ilp_gallery.ui.theme.Theme`."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
-        if styled and parent is None:
+        self._styled_root = styled and parent is None
+        if self._styled_root:
             self.setProperty("ilpRoot", True)
             self.setObjectName("ILPGalleryRoot")
-            self.setStyleSheet(theme.STYLESHEET)
+        self.theme = theme_mod.resolve(theme)
         self.library = library or GalleryLibrary()
         self.cache = cache or ThumbnailCache(parent=self)
         self.command_template = ""
@@ -185,8 +189,20 @@ class GalleryWidget(QWidget):
         self._library_dirty = QTimer(self, singleShot=True, interval=50)
         self._library_dirty.timeout.connect(self._refresh_from_library)
         self._refresh_from_library()
+        self.set_theme(self.theme)
 
     # -- public API ------------------------------------------------------
+    # ---------------------------------------------------------------- look
+    def set_theme(self, theme: "theme_mod.Theme | str | None") -> None:
+        """Switch colours live: "auto", "host", "ilp" or a Theme."""
+        self.theme = theme_mod.resolve(theme)
+        if self._styled_root:
+            self.setStyleSheet(self.theme.stylesheet())
+        self.delegate.set_theme(self.theme)
+        self.tree.set_theme(self.theme)
+        self.details.set_theme(self.theme)
+        self.view.viewport().update()
+
     # ---------------------------------------------------------------- data
     def add_source(self, source: DataSource, background: bool = True) -> None:
         """Add a data source. With ``background`` the (possibly slow) load runs off the GUI thread;

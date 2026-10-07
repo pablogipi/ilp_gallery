@@ -78,6 +78,8 @@ class CategoryTree(QTreeView):
         self.setMinimumWidth(250)
         self.ids: dict[Path, set[str]] = {}
         self._rows: dict[Path, tuple[QStandardItem, QStandardItem]] = {}
+        self._theme = theme.ILP
+        self._visible: set[str] | None = None
         self._total = 0
         self.setExpandsOnDoubleClick(False)
         self.selectionModel().currentChanged.connect(self._on_current)
@@ -124,7 +126,7 @@ class CategoryTree(QTreeView):
         count = QStandardItem("")
         count.setData(path, PathRole)
         count.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        count.setForeground(theme.c(theme.MUTED))
+        count.setForeground(self._theme.c("muted"))
         if bold:
             f = name.font()
             f.setBold(True)
@@ -135,7 +137,8 @@ class CategoryTree(QTreeView):
     # -- counts / selection --------------------------------------------
     def update_counts(self, visible: set[str] | None) -> None:
         """``visible`` = ids matching the search (None = no search: full counts)."""
-        muted, text = theme.c(theme.MUTED), theme.c(theme.TEXT)
+        self._visible = visible
+        muted, text = self._theme.c("muted"), self._theme.c("text")
         for path, (name, count) in self._rows.items():
             members = self.ids.get(path) if path else None
             if path == ():
@@ -146,6 +149,13 @@ class CategoryTree(QTreeView):
                 n = len(members & visible)
             count.setText(f"{n:,}")
             name.setForeground(text if n or visible is None else muted)
+
+    def set_theme(self, t: theme.Theme) -> None:
+        self._theme = t
+        muted = t.c("muted")
+        for _name, count in self._rows.values():
+            count.setForeground(muted)
+        self.update_counts(self._visible)
 
     def current_path(self) -> Path:
         idx = self.currentIndex()

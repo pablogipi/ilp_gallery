@@ -163,7 +163,7 @@ class PlayerWidget(QWidget):
         self.frame_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.loop_chk = QCheckBox("Loop", checked=True)
         self.info_lbl = QLabel("")
-        self.info_lbl.setStyleSheet("color: #999;")
+        self.info_lbl.setObjectName("muted")
 
         controls = QHBoxLayout()
         controls.setContentsMargins(6, 2, 6, 2)
