@@ -1,0 +1,445 @@
+"""Build gallery records from a Quixel Megascans (Bridge) download folder.
+
+Layout::
+
+    <root>/                       default: $ILP_MEGASCANS_ROOT or /ice/resources/ASSET_LIB/megascans/Downloaded
+        3d/ 3dplant/ atlas/ surface/        -> main category
+            <asset folder>/
+                <id>.json                   -> asset description (file name == id)
+                *_thumb.jpg, *_preview.jpg, textures, meshes ...
+
+Per asset:
+
+* ``id``, ``name`` and ``tags`` come from the JSON.
+* ``categories`` = top folder first, then the JSON ``categories``.
+* ``tags`` also get the useful ``semanticTags`` and ``assetCategories`` words.
+* ``thumbnail`` = the smallest JPEG preview **that exists on disk**. Falls back
+  to any local preview/thumb image, then to the smallest albedo JPEG.
+* ``path`` = a mid-size preview for the player pane (falls back to the thumbnail).
+* ``metadata`` keeps asset_dir, megascans type, maps, physical size, ``meta``
+  values (tileable, scanArea, ...), biome / region, average colour.
+
+Scanning is threaded (network shares are latency bound) and incremental:
+records whose JSON hasn't changed are reused from the previous output.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Iterable, Iterator
+
+log = logging.getLogger(__name__)
+
+DEFAULT_ROOT = os.environ.get("ILP_MEGASCANS_ROOT", "/ice/resources/ASSET_LIB/megascans/Downloaded")
+MAIN_CATEGORIES = ("3d", "3dplant", "atlas", "surface")
+JPEG_EXTS = (".jpg", ".jpeg")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png")
+EMPTY_VALUES = {"", "undefined", "null", "none", "n/a"}
+PLAYER_MAX_WIDTH = 1920  # biggest preview we'd load into the player pane
+IMPORTER_VERSION = 3     # bump when records change shape -> incremental scans rebuild
+
+# Display names: folder / assetCategories top level -> (tree label, tile subtitle)
+TYPE_LABELS = {
+    "3d": ("3D Assets", "3D Asset"), "3d asset": ("3D Assets", "3D Asset"),
+    "3dplant": ("3D Plants", "3D Plant"), "3d plant": ("3D Plants", "3D Plant"),
+    "plant": ("3D Plants", "3D Plant"),
+    "surface": ("Surfaces", "Surface"), "decal": ("Decals", "Decal"),
+    "atlas": ("Atlases", "Atlas"), "imperfection": ("Imperfections", "Imperfection"),
+    "displacement": ("Displacements", "Displacement"), "brush": ("Brushes", "Brush"),
+}
+
+# semanticTags keys worth searching on (the rest is noise or duplicated)
+_SEMANTIC_KEYS = ("contains", "descriptive", "environment", "state", "theme",
+                  "subject_matter", "color", "interior_exterior", "orientation")
+
+
+# -- helpers ---------------------------------------------------------------
+def _area(resolution: str | None) -> int:
+    try:
+        w, h = str(resolution).lower().split("x")
+        return int(float(w)) * int(float(h))
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _width(resolution: str | None) -> int:
+    try:
+        return int(float(str(resolution).lower().split("x")[0]))
+    except (ValueError, IndexError):
+        return 0
+
+
+def _words(value: Any) -> list[str]:
+    """Flatten str / list / nested dict into clean words."""
+    out: list[str] = []
+    if isinstance(value, str):
+        out += [v.strip() for v in value.split(",")]
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            out += _words(v)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            out.append(str(k).strip())
+            out += _words(v)
+    return [w for w in out if w]
+
+
+def _dedupe(words: Iterable[str]) -> list[str]:
+    seen, out = set(), []
+    for w in words:
+        k = w.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(w)
+    return out
+
+
+def pick_previews(data: dict, files: set[str]) -> tuple[str | None, str | None]:
+    """Return (thumbnail, player_preview) file names that exist in ``files``."""
+    images = [i for i in (data.get("previews") or {}).get("images") or []
+              if isinstance(i, dict) and isinstance(i.get("uri"), str) and len(i["uri"]) < 260]
+    local = [i for i in images if os.path.basename(i["uri"]) in files]
+
+    def key(i):  # smallest first: pixels, then bytes
+        return (_area(i.get("resolution")), i.get("contentLength") or 0)
+
+    jpgs = sorted((i for i in local if i["uri"].lower().endswith(JPEG_EXTS)), key=key)
+    thumb = os.path.basename(jpgs[0]["uri"]) if jpgs else None
+    if thumb is None and local:  # no JPEG on disk, take the smallest listed image
+        thumb = os.path.basename(sorted(local, key=key)[0]["uri"])
+
+    # Player: the plain "preview" (not clay/tiled), largest up to PLAYER_MAX_WIDTH.
+    def plain_preview(i):
+        tags = set(i.get("tags") or [])
+        return "preview" in tags and not tags & {"clay", "tiled"}
+    cands = [i for i in jpgs if plain_preview(i) and _width(i.get("resolution")) <= PLAYER_MAX_WIDTH] \
+        or [i for i in jpgs if _width(i.get("resolution")) <= PLAYER_MAX_WIDTH]
+    player = os.path.basename(max(cands, key=key)["uri"]) if cands else None
+    return thumb, player
+
+
+def _fallback_preview(files: set[str], asset_dir: str) -> str | None:
+    """No listed preview on disk: any local *preview* / *thumb* image, smallest file."""
+    cands = [f for f in files if f.lower().endswith(IMAGE_EXTS)
+             and any(k in f.lower() for k in ("preview", "thumb", "grid", "popup"))]
+    if not cands:
+        return None
+    def size(f):
+        try:
+            return os.path.getsize(os.path.join(asset_dir, f))
+        except OSError:
+            return 1 << 62
+    jpg = [f for f in cands if f.lower().endswith(JPEG_EXTS)]
+    return min(jpg or cands, key=size)
+
+
+def _albedo_fallback(data: dict, files: set[str]) -> str | None:
+    best = None
+    for comp in data.get("components") or []:
+        if comp.get("type") not in ("albedo", "diffuse", "opacity"):
+            continue
+        for u in comp.get("uris") or []:
+            for res in u.get("resolutions") or []:
+                for fmt in res.get("formats") or []:
+                    uri = os.path.basename(fmt.get("uri") or "")
+                    if uri in files and uri.lower().endswith(JPEG_EXTS):
+                        cand = (_area(res.get("resolution")), uri)
+                        best = min(best, cand) if best else cand
+        if best:
+            break
+    return best[1] if best else None
+
+
+def _find_json(asset_dir: str, files: set[str]) -> str | None:
+    jsons = [f for f in files if f.lower().endswith(".json")]
+    if not jsons:
+        return None
+    if len(jsons) == 1:
+        return jsons[0]
+    folder = os.path.basename(asset_dir).lower()
+    named = [j for j in jsons if os.path.splitext(j)[0].lower() in folder]
+    if named:
+        return named[0]
+    return max(jsons, key=lambda j: os.path.getsize(os.path.join(asset_dir, j)))
+
+
+# -- record building -------------------------------------------------------
+def asset_record(asset_dir: str, main_category: str) -> dict | None:
+    """Gallery record for one asset folder, or None if it isn't one."""
+    try:
+        files = {e.name for e in os.scandir(asset_dir) if e.is_file()}
+    except OSError as exc:
+        log.warning("Can't list %s: %s", asset_dir, exc)
+        return None
+    jname = _find_json(asset_dir, files)
+    if jname is None:
+        return None
+    jpath = os.path.join(asset_dir, jname)
+    try:
+        with open(jpath, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Skipping %s: %s", jpath, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    thumb, player = pick_previews(data, files)
+    thumb = thumb or _fallback_preview(files, asset_dir) or _albedo_fallback(data, files)
+    if thumb is None:
+        log.info("No preview image for %s", asset_dir)
+    player = player or thumb
+
+    asset_id = str(data.get("id") or os.path.splitext(jname)[0])
+    sem = data.get("semanticTags") or {}
+    tags = _dedupe(
+        _words(data.get("tags"))
+        + [w for k in _SEMANTIC_KEYS for w in _words(sem.get(k))]
+        + _words(data.get("assetCategories"))
+    )
+    paths = category_paths(data.get("assetCategories"), main_category)
+    top = paths[0][0].lower() if paths else main_category
+    type_label = TYPE_LABELS.get(top, TYPE_LABELS.get(main_category, (main_category, main_category.title())))[1]
+    categories = _dedupe([main_category] + _words(data.get("categories")) + [p for path in paths for p in path])
+    # Tags repeating the top-level categories are noise; category-path words stay searchable as tags.
+    drop = {c.lower() for c in [main_category] + _words(data.get("categories"))} | {"other"}
+    tags = [t for t in tags if t.lower() not in drop]
+
+    meta_list = [m for m in data.get("meta") or [] if isinstance(m, dict) and m.get("key")]
+    meta_values = {m["key"]: m.get("value") for m in meta_list}
+    def has_value(v):
+        return v is not None and v != [] and str(v).strip().lower() not in EMPTY_VALUES
+
+    display = [[m.get("name") or m["key"], _pretty(m.get("value"))] for m in meta_list
+               if has_value(m.get("value"))]
+    env = {k: v for k, v in (data.get("environment") or {}).items() if has_value(v)}
+    maps = _dedupe([c.get("type") for c in data.get("components") or [] if c.get("type")])
+    resolutions = sorted({r.get("resolution") for c in data.get("components") or []
+                          for u in c.get("uris") or [] for r in u.get("resolutions") or []
+                          if r.get("resolution")}, key=_area, reverse=True)
+    description = ", ".join(v for v in (env.get("biome"), env.get("region")) if v)
+    if env.get("biome"):
+        display.append(["Biome", env["biome"]])
+    if env.get("region"):
+        display.append(["Region", env["region"]])
+
+    return {
+        "id": asset_id,
+        "name": data.get("name") or asset_id,
+        "path": os.path.join(asset_dir, player) if player else jpath,
+        "type": "image",
+        "thumbnail": os.path.join(asset_dir, thumb) if thumb else None,
+        "categories": categories,
+        "tags": tags,
+        "description": description,
+        "metadata": {
+            "source": "megascans",
+            "importer_version": IMPORTER_VERSION,
+            "tile_aspect": 1.0,  # Megascans grid thumbs are square
+            "type_label": type_label,
+            "category_paths": paths,
+            "display": display,
+            "megascans_type": main_category,
+            "asset_dir": asset_dir,
+            "json": jpath,
+            "json_mtime": os.path.getmtime(jpath),
+            "maps": maps,
+            "resolutions": resolutions,
+            "physical_size": data.get("physicalSize"),
+            "average_color": data.get("averageColor") if has_value(data.get("averageColor")) else None,
+            "biome": env.get("biome"),
+            "region": env.get("region"),
+            **{k: v for k, v in meta_values.items() if has_value(v)},
+        },
+    }
+
+
+def category_paths(asset_categories: Any, main_category: str) -> list[list[str]]:
+    """{"surface": {"rock": {"cliff": {}, "rough": {}}}} -> [[surface, rock, cliff], [surface, rock, rough]]"""
+    paths: list[list[str]] = []
+
+    def walk(node, prefix):
+        if isinstance(node, dict) and node:
+            for k, v in node.items():
+                k = str(k).strip()
+                if k:
+                    walk(v, prefix + [k])
+        elif prefix:
+            paths.append(prefix)
+
+    walk(asset_categories, [])
+    # drop the uninformative "other" level Megascans uses a lot
+    paths = [[p for i, p in enumerate(path) if not (i and p.lower() == "other")] for path in paths]
+    return paths or [[main_category]]
+
+
+def _pretty(value: Any) -> str:
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(map(str, value))
+    return str(value)
+
+
+def iter_asset_dirs(root: str, categories: Iterable[str] = MAIN_CATEGORIES) -> Iterator[tuple[str, str]]:
+    for cat in categories:
+        cdir = os.path.join(root, cat)
+        try:
+            entries = sorted((e for e in os.scandir(cdir) if e.is_dir()), key=lambda e: e.name)
+        except OSError:
+            log.warning("Missing category folder %s", cdir)
+            continue
+        for e in entries:
+            yield e.path, cat
+
+
+def scan(root: str = DEFAULT_ROOT, previous: list[dict] | None = None, threads: int = 16,
+         categories: Iterable[str] = MAIN_CATEGORIES, progress=None) -> list[dict]:
+    """Scan ``root``; reuse records from ``previous`` whose JSON mtime is unchanged."""
+    reuse: dict[str, dict] = {}
+    for rec in previous or []:
+        m = rec.get("metadata") or {}
+        if m.get("source") == "megascans" and m.get("asset_dir"):
+            reuse[m["asset_dir"]] = rec
+
+    dirs = list(iter_asset_dirs(root, categories))
+
+    def work(args):
+        asset_dir, cat = args
+        old = reuse.get(asset_dir)
+        if old:
+            m = old["metadata"]
+            try:
+                if m.get("importer_version") == IMPORTER_VERSION and \
+                        os.path.getmtime(m["json"]) == m.get("json_mtime"):
+                    return old
+            except OSError:
+                pass
+        return asset_record(asset_dir, cat)
+
+    records: list[dict] = []
+    with ThreadPoolExecutor(max(1, threads)) as pool:
+        for n, rec in enumerate(pool.map(work, dirs), 1):
+            if rec:
+                records.append(rec)
+            if progress and (n % 200 == 0 or n == len(dirs)):
+                progress(n, len(dirs))
+    return records
+
+
+def build_library_json(output: str, root: str = DEFAULT_ROOT, full: bool = False,
+                       threads: int = 16, progress=None) -> tuple[int, int]:
+    """Scan and write ``output`` atomically (gzip if it ends in .gz). Returns (items, reused)."""
+    from ..core.source import read_json, write_json
+
+    previous: list[dict] = []
+    if not full and os.path.exists(output):
+        try:
+            previous = read_json(output).get("items", [])
+        except (OSError, ValueError, AttributeError):
+            previous = []
+    before = {id(r) for r in previous}
+    records = scan(root, previous, threads=threads, progress=progress)
+    reused = sum(1 for r in records if id(r) in before)
+    write_json(output, {"source": "megascans", "root": root, "importer_version": IMPORTER_VERSION,
+                        "items": records})
+    return len(records), reused
+
+
+# -- data source -------------------------------------------------------------
+from ..core.source import JsonFileSource  # noqa: E402  (core never imports this module)
+
+
+class MegascansSource(JsonFileSource):
+    """The Megascans download library as a gallery source.
+
+    Reads the pre-built cache (``megascans.json`` / ``.json.gz``) that everybody
+    shares; :meth:`rebuild` rescans ``root`` into it (incrementally)::
+
+        src = MegascansSource(cache="/ice/.../megascans.json.gz")
+        gallery.add_source(src)
+    """
+
+    def __init__(self, cache: str, root: str | None = None, name: str = "megascans",
+                 label: str = "Megascans") -> None:
+        super().__init__(cache, name=name, label=label)
+        self.root = root or DEFAULT_ROOT
+
+    def load(self):
+        if not os.path.exists(self.path):
+            log.info("No Megascans cache at %s yet: building it from %s", self.path, self.root)
+            self.rebuild()
+        records = super().load()
+        self.root = self.header.get("root") or self.root
+        return records
+
+    def rebuild(self, progress=None, log=None) -> None:
+        import time
+        t = time.perf_counter()
+        n, reused = build_library_json(self.path, root=self.root, progress=progress)
+        if log:
+            log(f"Megascans: {n:,} assets ({n - reused:,} new or changed) from {self.root} "
+                f"in {time.perf_counter() - t:.1f} s")
+
+    def outdated(self, items) -> int:
+        """How many items were written by an older importer version."""
+        return sum(1 for it in items if it.metadata.get("importer_version") != IMPORTER_VERSION)
+
+
+# -- helpers for export / drag callbacks -------------------------------------
+def json_path(item) -> str:
+    """The asset's original Megascans JSON (what an ingest tool usually wants)."""
+    return item.metadata["json"]
+
+
+def asset_data(item) -> dict:
+    """The original Megascans JSON, parsed."""
+    with open(json_path(item), "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def texture_files(item, maps: Iterable[str] | None = None, resolution: str | None = None,
+                  prefer: Iterable[str] = ("exr", "jpg", "jpeg", "png", "tif")) -> dict[str, str]:
+    """Texture files on disk per map type: ``{"albedo": "/.../x_4K_Albedo.exr", ...}``.
+
+    ``resolution`` like "4K"/"4096x4096" (default: the highest available on disk),
+    ``prefer`` orders file formats. Only files that exist are returned.
+    """
+    data = asset_data(item)
+    asset_dir = item.metadata["asset_dir"]
+    try:
+        files = set(os.listdir(asset_dir))
+    except OSError:
+        return {}
+    want = {m.lower() for m in maps} if maps else None
+    res_px = None
+    if resolution:
+        r = str(resolution).upper().rstrip("K")
+        res_px = int(r) * 1024 if str(resolution).upper().endswith("K") and r.isdigit() else _width(resolution)
+    rank = {ext: i for i, ext in enumerate(prefer)}
+    out: dict[str, str] = {}
+    for comp in data.get("components") or []:
+        mtype = (comp.get("type") or "").lower()
+        if want and mtype not in want:
+            continue
+        best = None
+        for u in comp.get("uris") or []:
+            for res in u.get("resolutions") or []:
+                w = _width(res.get("resolution"))
+                if res_px and w != res_px:
+                    continue
+                for fmt in res.get("formats") or []:
+                    f = os.path.basename(fmt.get("uri") or "")
+                    ext = f.rsplit(".", 1)[-1].lower()
+                    if f in files and ext in rank:
+                        key = (-w, rank[ext])
+                        if best is None or key < best[0]:
+                            best = (key, f)
+        if best:
+            out[mtype] = os.path.join(asset_dir, best[1])
+    return out

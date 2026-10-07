@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ilp-gallery"
+version = "0.1.0"
+description = "Image / GIF / movie gallery component for PySide6, standalone or inside Houdini, Maya and Nuke"
+requires-python = ">=3.10"
+# PySide6 is not a hard dependency: DCCs ship their own. Install the extra for standalone use.
+dependencies = []
+
+[project.optional-dependencies]
+standalone = ["PySide6>=6.5"]
+test = ["pytest"]
+
+[project.scripts]
+ilp-gallery = "ilp_gallery.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
