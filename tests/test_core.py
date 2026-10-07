@@ -22,9 +22,17 @@ RECORDS = [
 ]
 
 
+@pytest.fixture(params=["fts5", "python"], autouse=True)
+def backend(request, monkeypatch):
+    """Run every test in this module against both search backends."""
+    monkeypatch.setenv("ILP_GALLERY_SEARCH", request.param)
+    return request.param
+
+
 @pytest.fixture
-def lib():
+def lib(backend):
     lib = GalleryLibrary()
+    assert lib.index.backend == backend
     lib.add_records(RECORDS)
     return lib
 
@@ -145,5 +153,33 @@ def test_search_speed():
     for q in ("tag:tag5", "cat:cat3 common", "asset 12", "-common", "lorem"):
         lib.search(q)
     per_query = (time.perf_counter() - t) / 5
-    print(f"\n20k items: index {build * 1000:.0f} ms, {per_query * 1000:.1f} ms/query")
+    print(f"\n20k items [{lib.index.backend}]: index {build * 1000:.0f} ms, {per_query * 1000:.1f} ms/query")
     assert build < 5 and per_query < 0.25
+
+
+def test_falls_back_without_fts5(monkeypatch):
+    """Nuke's sqlite3 has no FTS5: the library must still build and search."""
+    from ilp_gallery.core import index
+    monkeypatch.delenv("ILP_GALLERY_SEARCH", raising=False)
+    monkeypatch.setattr(index, "_fts5_ok", False)
+    lib = GalleryLibrary()
+    assert lib.index.backend == "python"
+    lib.add_records(RECORDS)
+    assert set(lib.search("cat:crowd -tag:loop")) == {"b"}
+
+
+def test_backends_rank_alike():
+    """Both backends return the same ids in the same order for typical queries."""
+    import os
+    results = {}
+    for name in ("fts5", "python"):
+        os.environ["ILP_GALLERY_SEARCH"] = name
+        try:
+            lib = GalleryLibrary()
+        finally:
+            del os.environ["ILP_GALLERY_SEARCH"]
+        lib.add_records(RECORDS)
+        results[name] = [lib.search(q) for q in ("walk", "crowd", "-crowd", "hero", "lib")]
+    for f, p in zip(results["fts5"], results["python"]):
+        assert set(f) == set(p)
+        assert f[0] == p[0]

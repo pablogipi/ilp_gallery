@@ -7,7 +7,7 @@ A PySide6 gallery for images, GIFs and movies that runs on its own or inside Hou
 │ GalleryItem   one JSON record                           │
 │ GalleryLibrary   the middle layer: loads/saves JSON,    │
 │               holds items, notifies listeners           │
-│ SearchIndex   SQLite FTS5, derived from the library     │
+│ SearchIndex   FTS5 or pure Python, derived from library │
 └──────────────────────────────────────────────────────────┘
 ┌──────── ilp_gallery.media ────────┐ ┌──── ilp_gallery.ui ────┐
 │ ffmpeg   probe / extract frames   │ │ GalleryWidget (embed)  │
@@ -85,7 +85,7 @@ Re-running only re-reads assets whose JSON changed. Pass `--full` to rescan ever
 
 ## Search
 
-Words match by prefix and the search runs as you type (FTS5 with bm25 ranking; the name counts most, then tags, then categories, then everything else). Accents are ignored, so `cafe` finds `Café`.
+Words match by prefix and the search runs as you type (FTS5 with bm25 ranking; the name counts most, then tags, then categories, then everything else). If the host's `sqlite3` has no FTS5, as in Nuke's bundled Python, a pure-Python index with the same query language and ranking is used instead. `ILP_GALLERY_SEARCH=fts5|python` forces one. Accents are ignored, so `cafe` finds `Café`.
 
 | Query | Meaning |
 |---|---|
