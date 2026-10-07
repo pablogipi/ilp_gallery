@@ -116,7 +116,8 @@ class GalleryBrowser(QMainWindow):
 
         self.gallery = GalleryWidget(parent=self, styled=False, theme=theme, **widget_kwargs)
         self.setCentralWidget(self.gallery)
-        self.setStyleSheet(self.theme.stylesheet())
+        self._restyle(self.theme)
+        self.gallery.themeChanged.connect(self._restyle)
         self.gallery.set_export_enabled(True)
         self.gallery.command_template = setting("export/command")
 
@@ -253,10 +254,13 @@ class GalleryBrowser(QMainWindow):
     def theme(self) -> "theme_mod.Theme":
         return self.gallery.theme
 
+    def _restyle(self, t: "theme_mod.Theme") -> None:
+        self.setPalette(t.qpalette())
+        self.setStyleSheet(t.stylesheet())
+
     def set_theme(self, theme: "theme_mod.Theme | str | None") -> None:
         """Switch colours live: "auto", "host", "ilp" or a Theme."""
-        self.gallery.set_theme(theme)
-        self.setStyleSheet(self.theme.stylesheet())
+        self.gallery.set_theme(theme)  # themeChanged restyles the window
 
     def open_settings(self) -> None:
         dlg = SettingsDialog(self)

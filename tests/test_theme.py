@@ -127,3 +127,104 @@ def test_selected_row_text_is_readable():
     # Nuke: black HighlightedText would sit on a darkened orange -> use the light text instead
     t = theme.from_palette(palette(NUKE_LIKE))
     assert QColor(t.select_text).lightness() > QColor(t.select_bg).lightness()
+
+
+# -- Houdini: colours come from hou.qt.getColor, not the Qt palette -----------
+
+class _FakeHouQt:
+    def __init__(self, colors):
+        self.colors = colors
+
+    def getColor(self, name):  # noqa: N802 (Houdini's API name)
+        if name not in self.colors:
+            raise RuntimeError("OperationFailed")
+        return QColor(self.colors[name])
+
+
+HOUDINI_DARK_PALETTE = {QPalette.Window: "#3a3a3a", QPalette.Base: "#131313",
+                        QPalette.WindowText: "#cccccc", QPalette.Highlight: "#e0a030",
+                        QPalette.HighlightedText: "#000000"}
+HOUDINI_LIGHT_SCHEME = {"BackColor": "#d1d1d1", "TextColor": "#2e2e2e", "ButtonColor": "#d1d1d1"}
+
+
+@pytest.fixture
+def houdini_light(app):
+    """Houdini Light as reported in the field: hou says light, the Qt palette stays dark."""
+    old = app.palette()
+    app.setPalette(palette(HOUDINI_DARK_PALETTE))
+    hou = types.ModuleType("hou")
+    hou.qt = _FakeHouQt(dict(HOUDINI_LIGHT_SCHEME))
+    sys.modules["hou"] = hou
+    yield hou
+    del sys.modules["hou"]
+    app.setPalette(old)
+
+
+def test_houdini_uses_its_colour_scheme(houdini_light):
+    t = theme.resolve()
+    assert t.name == "host:houdini"
+    assert t.bg == "#d1d1d1" and t.text == "#2e2e2e"
+    assert QColor(t.panel).lightness() > 128          # not the palette's black Base
+    assert t.accent == "#e0a030"                      # highlight still from the palette
+
+
+def test_houdini_scheme_switch_is_picked_up_when_shown(houdini_light):
+    from ilp_gallery.ui import GalleryBrowser
+    b = GalleryBrowser()
+    try:
+        b.show()
+        assert b.theme.bg == "#d1d1d1"
+        b.hide()
+        houdini_light.qt.colors.update(BackColor="#3a3a3a", TextColor="#cccccc", ButtonColor="#3a3a3a")
+        b.show()                                       # e.g. switching back to the pane tab
+        assert b.theme.bg == "#3a3a3a"
+        assert "#3a3a3a" in b.styleSheet()             # window restyled via themeChanged
+    finally:
+        b.close()
+        b.gallery.cache.shutdown()
+
+
+def test_panel_never_mixes_light_and_dark():
+    # light window, black Base, light text: what a half-updated host can report
+    t = theme.from_palette(palette({QPalette.Window: "#d1d1d1", QPalette.Base: "#000000",
+                                    QPalette.WindowText: "#e0e0e0"}))
+    assert QColor(t.panel).lightness() > 128
+    assert QColor(t.text).lightness() < 128           # unreadable text replaced
+
+
+def test_follows_host_palette_changes(host_palette, app):
+    from ilp_gallery.ui import GalleryBrowser
+    b = GalleryBrowser()
+    fixed = GalleryBrowser(theme="ilp")
+    try:
+        b.show()
+        fixed.show()
+        assert b.theme.accent == "#f7931e"
+        app.setPalette(palette({**NUKE_LIKE, QPalette.Highlight: "#30a0e0"}))
+        for _ in range(5):
+            app.processEvents()
+        assert b.theme.accent == "#30a0e0"
+        assert "#30a0e0" in b.styleSheet()
+        assert fixed.theme is theme.ILP                # explicit themes don't follow
+    finally:
+        for w in (b, fixed):
+            w.close()
+            w.gallery.cache.shutdown()
+
+
+def test_unstyled_widgets_get_the_theme_palette(houdini_light):
+    from ilp_gallery.ui import GalleryBrowser
+    b = GalleryBrowser()
+    try:
+        # e.g. the player's Loop check box: drawn from the palette, not the stylesheet
+        assert b.gallery.details.palette().color(QPalette.Base) == QColor(b.theme.panel)
+        assert QColor(b.theme.panel).lightness() > 128
+    finally:
+        b.close()
+        b.gallery.cache.shutdown()
+
+
+def test_links_are_readable():
+    t = theme.from_palette(palette({QPalette.Window: "#d1d1d1", QPalette.Base: "#d1d1d1",
+                                    QPalette.WindowText: "#2e2e2e", QPalette.Highlight: "#e0a030"}))
+    assert theme._contrast(QColor(t.link), QColor(t.panel)) >= 4.5

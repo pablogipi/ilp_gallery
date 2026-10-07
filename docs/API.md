@@ -163,7 +163,9 @@ At 18,886 assets:
 
 ## 7. Look
 
-By default the gallery matches the application it runs in. Inside Houdini, Nuke or Maya it derives its colours from the host's Qt palette (window, panels, text, highlight) and keeps the host's font size. Standalone, it uses the built-in ILP look.
+By default the gallery matches the application it runs in. Inside Houdini it reads Houdini's colour scheme (`hou.qt.getColor`: background, text, buttons), since Houdini's Qt palette doesn't follow schemes like Houdini Light. In Nuke and Maya it derives the colours from the host's Qt palette. Either way it keeps the host's font size, and it follows the host when its colours change: on a palette change, and whenever the panel is shown. Standalone, it uses the built-in ILP look.
+
+The derived colours are sanity-checked: panels stay on the same side of light/dark as the window, and text, selected rows and links keep readable contrast, whatever the host reports.
 
 ```python
 from ilp_gallery.ui import ILP, Theme
@@ -175,6 +177,6 @@ make_browser(theme=ILP.replace(accent="#e08a3d"))   # any Theme; .replace() chan
 browser.set_theme("ilp")                            # switch live
 ```
 
-`ILP_GALLERY_THEME=auto|host|ilp` overrides what `"auto"` picks; an explicit `theme=` argument still wins. `browser.theme` is the `Theme` in use.
+`ILP_GALLERY_THEME=auto|host|ilp` overrides what `"auto"` picks; an explicit `theme=` argument still wins. `browser.theme` is the `Theme` in use. `gallery.refresh_theme()` re-reads the host's colours by hand, and `gallery.themeChanged` fires with the new `Theme`.
 
-> The host looks were checked with palettes like Nuke's and Maya's, not inside the real applications yet.
+> Houdini Light was checked against values reported from a real session; the Nuke and Maya looks with palettes like theirs.

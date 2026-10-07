@@ -7,7 +7,9 @@ same object. Pick one with ``theme=`` on GalleryBrowser / GalleryWidget /
 
 * ``"auto"`` (default): match the host inside Houdini, Nuke or Maya, the
   ILP look standalone.
-* ``"host"``: derive the colours from the running application's QPalette.
+* ``"host"``: derive the colours from the host: its colour scheme in Houdini
+  (``hou.qt.getColor``), the running application's QPalette elsewhere.
+  "auto" and "host" follow the host when its colours change.
 * ``"ilp"``: the built-in ILP look.
 * a :class:`Theme`, e.g. ``ILP.replace(accent="#e08a3d")``.
 
@@ -50,6 +52,26 @@ class Theme:
     def replace(self, **changes) -> "Theme":
         return dataclasses.replace(self, **changes)
 
+    def qpalette(self) -> QPalette:
+        """The theme as a QPalette, for whatever the stylesheet doesn't cover
+        (check box indicators, popups...), so nothing falls back to the host's."""
+        p = QPalette()
+        for roles, colour in (
+            ((QPalette.Window,), self.bg),
+            ((QPalette.Base, QPalette.ToolTipBase), self.panel),
+            ((QPalette.AlternateBase, QPalette.Button), self.tile),
+            ((QPalette.WindowText, QPalette.Text, QPalette.ButtonText, QPalette.ToolTipText), self.text),
+            ((QPalette.PlaceholderText,), self.muted),
+            ((QPalette.Highlight,), self.accent),
+            ((QPalette.HighlightedText,), self.accent_text),
+            ((QPalette.Link,), self.link),
+        ):
+            for role in roles:
+                p.setColor(role, QColor(colour))
+        for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+            p.setColor(QPalette.Disabled, role, QColor(self.muted))
+        return p
+
     def stylesheet(self) -> str:
         return _STYLESHEET.format(
             font=f"font-size: {self.font_size};" if self.font_size else "",
@@ -80,19 +102,26 @@ def _mix(a: QColor, b: QColor, t: float) -> QColor:
     )
 
 
+def _luminance(c: QColor) -> float:
+    def ch(v: float) -> float:
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
+
+
+def _contrast(a: QColor, b: QColor) -> float:
+    """WCAG contrast ratio, 1 (none) .. 21 (black on white)."""
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
 def _readable(bg: QColor, *candidates: QColor) -> QColor:
     """The candidate with the most luminance contrast against ``bg``."""
-    def lum(c: QColor) -> float:
-        def ch(v: float) -> float:
-            v /= 255
-            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
-        return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
+    return max(candidates, key=lambda c: _contrast(bg, c))
 
-    def contrast(a: QColor, b: QColor) -> float:
-        la, lb = sorted((lum(a), lum(b)), reverse=True)
-        return (la + 0.05) / (lb + 0.05)
 
-    return max(candidates, key=lambda c: contrast(bg, c))
+def _is_dark(c: QColor) -> bool:
+    return c.lightness() < 128
 
 
 def _shade(c: QColor, amount: int, base: QColor) -> QColor:
@@ -110,10 +139,21 @@ def from_palette(pal: QPalette, name: str = "host") -> Theme:
     text = pal.color(QPalette.WindowText)
     hi = pal.color(QPalette.Highlight)
     hi_text = pal.color(QPalette.HighlightedText)
-    select_bg = _mix(hi, window, 0.45)
-    # Some hosts set Base equal to Window; keep the side panels distinguishable.
-    if abs(base.lightness() - window.lightness()) < 4:
+    # Hosts don't always keep every role in step with their colour scheme (Houdini
+    # Light still reports a black Base). Panels must stay on the window's side of
+    # light/dark, and distinguishable from it.
+    if _is_dark(base) != _is_dark(window) or abs(base.lightness() - window.lightness()) < 4:
         base = _shade(window, -5, window)
+    if _contrast(text, window) < 4.5:
+        text = _readable(window, text, QColor("#e6e6e6"), QColor("#1e1e1e"))
+    if _contrast(hi_text, hi) < 3:
+        hi_text = _readable(hi, hi_text, QColor("#ffffff"), QColor("#000000"))
+    select_bg = _mix(hi, window, 0.45)
+    link = _mix(hi, text, 0.35)
+    for t in (0.55, 0.75, 1.0):  # links stay readable on the panels
+        if _contrast(link, base) >= 4.5:
+            break
+        link = _mix(hi, text, t)
     return Theme(
         name=name,
         bg=_hex(window),
@@ -129,16 +169,51 @@ def from_palette(pal: QPalette, name: str = "host") -> Theme:
         accent_text=_hex(hi_text),
         select_bg=_hex(select_bg),
         select_text=_hex(_readable(select_bg, text, hi_text, QColor("#ffffff"), QColor("#000000"))),
-        link=_hex(_mix(hi, text, 0.35)),
+        link=_hex(link),
         font_size=None,  # keep the host's font size
     )
 
 
-def host_theme() -> Theme:
-    """Theme derived from the running QApplication's palette."""
+def _houdini_colors() -> dict[str, QColor]:
+    """Houdini's current colour scheme via hou.qt.getColor (empty if unavailable).
+
+    Houdini styles its UI from its own scheme, which the Qt palette doesn't
+    always follow (e.g. after switching to Houdini Light).
+    """
+    try:
+        import hou
+    except ImportError:
+        return {}
+    out = {}
+    for name in ("BackColor", "TextColor", "ButtonColor"):
+        try:
+            out[name] = QColor(hou.qt.getColor(name))
+        except Exception:  # unknown name / older Houdini
+            pass
+    return out
+
+
+def host_palette() -> QPalette:
+    """The host's colours as a QPalette: the app palette, corrected from the
+    host's own colour scheme where we know how to read it."""
     app = QGuiApplication.instance()
-    pal = app.palette() if app is not None else QPalette()
-    return from_palette(pal, name=f"host:{detect_host()}")
+    pal = QPalette(app.palette()) if app is not None else QPalette()
+    if detect_host() == "houdini":
+        hc = _houdini_colors()
+        if "BackColor" in hc:
+            pal.setColor(QPalette.Window, hc["BackColor"])
+            pal.setColor(QPalette.Base, hc["BackColor"])  # from_palette derives the panel shade
+        if "TextColor" in hc:
+            pal.setColor(QPalette.WindowText, hc["TextColor"])
+            pal.setColor(QPalette.Text, hc["TextColor"])
+        if "ButtonColor" in hc:
+            pal.setColor(QPalette.Button, hc["ButtonColor"])
+    return pal
+
+
+def host_theme() -> Theme:
+    """Theme derived from the host application's colours."""
+    return from_palette(host_palette(), name=f"host:{detect_host()}")
 
 
 def detect_host() -> str:
@@ -235,6 +310,13 @@ QWidget#ILPGalleryRoot QLabel#muted {{ color: {muted}; }}
 QWidget#ILPGalleryRoot QLabel#title {{ font-size: 14pt; font-weight: 600; }}
 QToolTip {{ background: {panel}; color: {text}; border: 1px solid {border}; }}
 QCheckBox {{ spacing: 6px; }}
+QCheckBox::indicator {{
+    width: 12px; height: 12px; border-radius: 3px;
+    background: {panel}; border: 1px solid {muted};
+}}
+QCheckBox::indicator:hover {{ border-color: {accent}; }}
+QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent}; }}
+QCheckBox::indicator:disabled {{ background: {bg}; border-color: {border}; }}
 """
 
 

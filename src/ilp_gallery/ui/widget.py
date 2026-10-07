@@ -19,7 +19,7 @@ from typing import Callable, Iterable
 
 import time
 
-from PySide6.QtCore import QItemSelectionModel, QModelIndex, QObject, QRunnable, QThreadPool, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, QObject, QRunnable, QThreadPool, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMenu, QPushButton, QSlider, QSplitter, QVBoxLayout, QWidget,
@@ -60,8 +60,31 @@ class _Job(QRunnable):
             self.signals.done.emit(self.token, None, exc)
 
 
+class _AppPaletteWatcher(QObject):
+    """Calls ``callback`` after the application's palette changes.
+
+    Qt 6 only sends ApplicationPaletteChange events to the application and
+    top-level windows, and the gallery is usually embedded in a host pane, so
+    listen to the application's paletteChanged signal instead (an event filter
+    on the application would run Python for every event in the host). If a
+    future Qt drops the signal, the refresh on show still applies.
+    """
+
+    def __init__(self, callback: Callable[[], None], parent: QObject) -> None:
+        super().__init__(parent)
+        self._callback = callback
+        app = QGuiApplication.instance()
+        signal = getattr(app, "paletteChanged", None) if app is not None else None
+        if signal is not None:
+            signal.connect(self._on_palette)
+
+    def _on_palette(self, *_args) -> None:
+        QTimer.singleShot(0, self, self._callback)  # after the host finishes; dropped if we are deleted
+
+
 class GalleryWidget(QWidget):
     itemActivated = Signal(object)        # GalleryItem (double-click / Enter)
+    themeChanged = Signal(object)         # Theme
     selectionChanged = Signal(list)       # list[GalleryItem]
     currentChanged = Signal(object)       # GalleryItem | None (shown in details)
     queryChanged = Signal(str)
@@ -88,6 +111,7 @@ class GalleryWidget(QWidget):
         if self._styled_root:
             self.setProperty("ilpRoot", True)
             self.setObjectName("ILPGalleryRoot")
+        self._theme_spec = theme
         self.theme = theme_mod.resolve(theme)
         self.library = library or GalleryLibrary()
         self.cache = cache or ThumbnailCache(parent=self)
@@ -189,19 +213,42 @@ class GalleryWidget(QWidget):
         self._library_dirty = QTimer(self, singleShot=True, interval=50)
         self._library_dirty.timeout.connect(self._refresh_from_library)
         self._refresh_from_library()
-        self.set_theme(self.theme)
+        self._apply_theme(self.theme)
+        self._palette_watcher = _AppPaletteWatcher(self.refresh_theme, self)
 
     # -- public API ------------------------------------------------------
     # ---------------------------------------------------------------- look
     def set_theme(self, theme: "theme_mod.Theme | str | None") -> None:
-        """Switch colours live: "auto", "host", "ilp" or a Theme."""
-        self.theme = theme_mod.resolve(theme)
+        """Switch colours live: "auto", "host", "ilp" or a Theme.
+
+        "auto" / "host" keep following the host: the colours are worked out again
+        when the host's palette changes and whenever the gallery is shown.
+        """
+        self._theme_spec = theme
+        self._apply_theme(theme_mod.resolve(theme))
+
+    def refresh_theme(self) -> None:
+        """Re-read the host's colours (no-op for fixed themes or if nothing changed)."""
+        if isinstance(self._theme_spec, theme_mod.Theme):
+            return
+        new = theme_mod.resolve(self._theme_spec)
+        if new != self.theme:
+            self._apply_theme(new)
+
+    def _apply_theme(self, t: "theme_mod.Theme") -> None:
+        self.theme = t
         if self._styled_root:
+            self.setPalette(self.theme.qpalette())
             self.setStyleSheet(self.theme.stylesheet())
         self.delegate.set_theme(self.theme)
         self.tree.set_theme(self.theme)
         self.details.set_theme(self.theme)
         self.view.viewport().update()
+        self.themeChanged.emit(self.theme)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.refresh_theme()  # e.g. the host's scheme changed while the pane was hidden
 
     # ---------------------------------------------------------------- data
     def add_source(self, source: DataSource, background: bool = True) -> None:
