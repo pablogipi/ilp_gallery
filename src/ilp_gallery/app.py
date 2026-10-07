@@ -113,9 +113,9 @@ def _dark_palette(app) -> None:
         p.setColor(role, QColor(*c))
     app.setPalette(p)
 
-
-def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+def parse_args( argv: list[str] | None = None ):
+    """Parse arguments
+    """
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(prog="ilp-gallery", description="Image / movie gallery")
     sub = parser.add_subparsers(dest="cmd")
@@ -155,6 +155,13 @@ def main(argv: list[str] | None = None) -> int:
     if not argv or argv[0] not in {"scan", "megascans", "search", "thumbs", "gui", "-h", "--help"}:
         argv = ["gui", *argv]
     args = parser.parse_args(argv)
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    args = parse_args( argv )
+
     return args.fn(args)
 
 

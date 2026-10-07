@@ -48,7 +48,9 @@ import inspect
 import json
 import shlex
 import subprocess
+import traceback
 from dataclasses import dataclass, field
+from pprint import pprint
 from typing import Any, Callable, Iterable
 
 from PySide6.QtCore import QMimeData, QUrl
@@ -103,6 +105,8 @@ class Exporter:
             try:
                 result = self.fn(values if self.batch else values[0], **kw)
             except Exception as exc:  # report and carry on with the next item
+                err = "".join(traceback.format_exception(exc))
+                log(err)
                 log(f"   ERROR {type(exc).__name__}: {exc}")
                 result = False
             if result is False:
