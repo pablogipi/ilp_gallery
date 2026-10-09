@@ -206,3 +206,20 @@ The pieces are generated as SVGs from the theme's colours into `~/.cache/ilp_gal
 Menus you create yourself inside the gallery get the shortcut marks with `gallery.theme.polish_menu(menu)` (a no-op for other themes).
 
 `ThumbWheel` is the IRIX thumbwheel as a `QAbstractSlider`, for your own tools: `ThumbWheel(Qt.Horizontal, theme)`. It works with any theme.
+
+### Fusion style
+
+The three SGI palettes also come in Qt's built-in Fusion style: same colours, modern widgets. Six looks in all:
+
+| | light | dark (Flame) | slate |
+|---|---|---|---|
+| SGI style | `"sgi"` | `"sgi-dark"` | `"sgi-slate"` |
+| Fusion style | `"fusion"` | `"fusion-dark"` | `"fusion-slate"` |
+
+```python
+make_browser(theme="fusion-dark")                  # by name
+make_browser(theme="sgi-dark", style="fusion")     # or palette + style
+browser.set_theme("sgi-slate", style="fusion")     # live
+```
+
+`style=` accepts `"sgi"` or `"fusion"` with any of the SGI palettes, including tweaked ones (`SGI.replace(...)`). Fusion is applied to the gallery's own widgets only, like the SGI style, and switching looks live removes whatever the previous one installed.

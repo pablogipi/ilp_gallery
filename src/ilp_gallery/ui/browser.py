@@ -106,15 +106,17 @@ class LogPanel(QWidget):
 
 class GalleryBrowser(QMainWindow):
     def __init__(self, parent: QWidget | None = None, theme: "theme_mod.Theme | str | None" = None,
-                 **widget_kwargs) -> None:
+                 style: str | None = None, **widget_kwargs) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
-        standalone), "host", "ilp" or a :class:`~ilp_gallery.ui.theme.Theme`."""
+        standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
+        "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
+        ``style``: "sgi" or "fusion" to draw an SGI palette in that widget style."""
         super().__init__(parent)
         self.setObjectName("ILPGalleryRoot")
         self.setWindowTitle("ILP Gallery")
         self.setDockOptions(QMainWindow.AnimatedDocks)
 
-        self.gallery = GalleryWidget(parent=self, styled=False, theme=theme, **widget_kwargs)
+        self.gallery = GalleryWidget(parent=self, styled=False, theme=theme, style=style, **widget_kwargs)
         self.setCentralWidget(self.gallery)
         self._restyle(self.theme)
         self.gallery.themeChanged.connect(self._restyle)
@@ -267,9 +269,9 @@ class GalleryBrowser(QMainWindow):
         super().showEvent(event)
         self.theme.polish(self)         # widgets created since the theme was applied
 
-    def set_theme(self, theme: "theme_mod.Theme | str | None") -> None:
-        """Switch colours live: "auto", "host", "ilp" or a Theme."""
-        self.gallery.set_theme(theme)  # themeChanged restyles the window
+    def set_theme(self, theme: "theme_mod.Theme | str | None", style: str | None = None) -> None:
+        """Switch the look live (see ``__init__``)."""
+        self.gallery.set_theme(theme, style)  # themeChanged restyles the window
 
     def open_settings(self) -> None:
         dlg = SettingsDialog(self)

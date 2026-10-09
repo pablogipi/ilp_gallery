@@ -102,17 +102,19 @@ class GalleryWidget(QWidget):
                  parent: QWidget | None = None, show_sidebar: bool = True,
                  show_details: bool = True, tile_aspect: float | None = None,
                  styled: bool = True, theme: "theme_mod.Theme | str | None" = None,
-                 **_ignored) -> None:
+                 style: str | None = None, **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
-        standalone), "host", "ilp" or a :class:`~ilp_gallery.ui.theme.Theme`."""
+        standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
+        "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
+        ``style``: "sgi" or "fusion" to draw an SGI palette in that widget style."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
         if self._styled_root:
             self.setProperty("ilpRoot", True)
             self.setObjectName("ILPGalleryRoot")
-        self._theme_spec = theme
-        self.theme = theme_mod.resolve(theme)
+        self._theme_spec = (theme, style)
+        self.theme = theme_mod.resolve(theme, style)
         self.library = library or GalleryLibrary()
         self.cache = cache or ThumbnailCache(parent=self)
         self.command_template = ""
@@ -218,20 +220,21 @@ class GalleryWidget(QWidget):
 
     # -- public API ------------------------------------------------------
     # ---------------------------------------------------------------- look
-    def set_theme(self, theme: "theme_mod.Theme | str | None") -> None:
-        """Switch colours live: "auto", "host", "ilp" or a Theme.
+    def set_theme(self, theme: "theme_mod.Theme | str | None", style: str | None = None) -> None:
+        """Switch the look live: a theme name or Theme, optionally with a widget
+        ``style`` ("sgi" or "fusion") for the SGI palettes.
 
         "auto" / "host" keep following the host: the colours are worked out again
         when the host's palette changes and whenever the gallery is shown.
         """
-        self._theme_spec = theme
-        self._apply_theme(theme_mod.resolve(theme))
+        self._theme_spec = (theme, style)
+        self._apply_theme(theme_mod.resolve(theme, style))
 
     def refresh_theme(self) -> None:
         """Re-read the host's colours (no-op for fixed themes or if nothing changed)."""
-        if isinstance(self._theme_spec, theme_mod.Theme):
+        if isinstance(self._theme_spec[0], theme_mod.Theme):
             return
-        new = theme_mod.resolve(self._theme_spec)
+        new = theme_mod.resolve(*self._theme_spec)
         if new != self.theme:
             self._apply_theme(new)
 

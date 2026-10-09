@@ -12,7 +12,9 @@ same object. Pick one with ``theme=`` on GalleryBrowser / GalleryWidget /
   "auto" and "host" follow the host when its colours change.
 * ``"ilp"``: the built-in ILP look.
 * ``"sgi"``, ``"sgi-dark"``, ``"sgi-slate"``: the SGI / IRIX look
-  (see :mod:`ilp_gallery.ui.sgi`).
+  (see :mod:`ilp_gallery.ui.sgi`); ``"fusion"``, ``"fusion-dark"``,
+  ``"fusion-slate"``: the same palettes in Qt's Fusion style. ``style="fusion"``
+  or ``style="sgi"`` picks the widget style for any of these palettes.
 * a :class:`Theme`, e.g. ``ILP.replace(accent="#e08a3d")``.
 
 The environment variable ``ILP_GALLERY_THEME=auto|host|ilp|sgi|...`` overrides the
@@ -243,8 +245,17 @@ def detect_host() -> str:
     return "standalone"
 
 
-def resolve(theme: "Theme | str | None" = None) -> Theme:
-    """Turn a ``theme=`` argument into a Theme (see the module docstring)."""
+def resolve(theme: "Theme | str | None" = None, style: str | None = None) -> Theme:
+    """Turn ``theme=`` (and optionally ``style=``) arguments into a Theme
+    (see the module docstring)."""
+    t = _resolve_theme(theme)
+    if style:
+        from .sgi import with_style
+        t = with_style(t, style)
+    return t
+
+
+def _resolve_theme(theme: "Theme | str | None") -> Theme:
     if isinstance(theme, Theme):
         return theme
     choice = (theme or "auto").lower()
@@ -256,12 +267,12 @@ def resolve(theme: "Theme | str | None" = None) -> Theme:
         return host_theme()
     if choice == "ilp":
         return ILP
-    if choice.startswith("sgi"):
+    if choice.startswith(("sgi", "fusion")):
         from .sgi import PRESETS
         if choice in PRESETS:
             return PRESETS[choice]
     raise ValueError(f"Unknown theme {theme!r}: use 'auto', 'host', 'ilp', 'sgi', 'sgi-dark', "
-                     "'sgi-slate' or a Theme")
+                     "'sgi-slate', 'fusion', 'fusion-dark', 'fusion-slate' or a Theme")
 
 
 _STYLESHEET = """
