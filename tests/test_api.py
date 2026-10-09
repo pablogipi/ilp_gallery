@@ -321,3 +321,31 @@ def test_megascans_ingest_example_callback():
     lines = []
     assert megascans_ingest.ingest("/x/abc.json", lines.append) is True
     assert lines == ["Ingesting /x/abc.json"]
+
+
+def test_source_failure_reports_full_traceback(app, gallery, caplog):
+    """A failing load() shows the whole traceback (log panel + logging), down to the
+    line in the source's own code, even though it ran on a worker thread."""
+    import logging
+    from ilp_gallery.core import DataSource
+
+    def parse_publish(p):
+        return p["path"]["local_path"]
+
+    class Broken(DataSource):
+        name, label = "broken", "Broken source"
+
+        def load(self):
+            return [parse_publish({"code": "x"})]
+
+    lines, failed = [], []
+    gallery.logMessage.connect(lines.append)
+    gallery.sourceFailed.connect(lambda src, msg: failed.append(msg))
+    with caplog.at_level(logging.ERROR, logger="ilp_gallery"):
+        gallery.add_source(Broken())
+        assert wait(app, lambda: failed)
+    assert failed == ["KeyError: 'path'"]                       # the signal keeps the short form
+    err = next(m for m in lines if m.startswith("ERROR loading Broken source"))
+    assert "Traceback (most recent call last)" in err
+    assert "in parse_publish" in err and "in load" in err       # down to the user's code
+    assert any("in parse_publish" in r.getMessage() for r in caplog.records)

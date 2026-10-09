@@ -13,8 +13,10 @@ For the full app window (menu, export log, rescan, settings) use
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
+import traceback
 from typing import Callable, Iterable
 
 import time
@@ -37,6 +39,14 @@ from .model import GalleryModel, ItemRole
 from .search import SearchField, quote_value
 from .tasks import TaskThread, format_command
 from .tree import CategoryTree
+
+log = logging.getLogger("ilp_gallery")
+
+
+def format_traceback(exc: BaseException) -> str:
+    """The full traceback of ``exc``, as Python prints it (works after the exception
+    has crossed threads: the traceback travels with the exception object)."""
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
 from .view import GalleryView
 
 ItemsCallback = Callable[[list[GalleryItem]], None]
@@ -318,7 +328,9 @@ class GalleryWidget(QWidget):
 
     def _report_failure(self, src: DataSource, exc: Exception) -> None:
         msg = f"{type(exc).__name__}: {exc}"
-        self.logMessage.emit(f"ERROR loading {src.label}: {msg}")
+        tb = format_traceback(exc)
+        self.logMessage.emit(f"ERROR loading {src.label}: {msg}\n{tb}")
+        log.error("loading %s failed:\n%s", src.label, tb)      # also to the terminal / host console
         self.sourceFailed.emit(src, msg)
 
     def _poll_sources(self) -> None:
@@ -345,7 +357,9 @@ class GalleryWidget(QWidget):
         elif kind == "poll":
             self._polling.discard(src.name)
             if error is not None:
-                self.logMessage.emit(f"{src.label}: poll failed: {error}")
+                tb = format_traceback(error)
+                self.logMessage.emit(f"{src.label}: poll failed: {type(error).__name__}: {error}\n{tb}")
+                log.error("polling %s failed:\n%s", src.label, tb)
             elif result and result.reset:
                 self.logMessage.emit(f"{src.label} changed on disk: reloading.")
                 self._reload(src, True)
