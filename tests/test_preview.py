@@ -138,7 +138,10 @@ def launched(monkeypatch):
         def __init__(self, args, **kw):
             calls.append(args)
 
-    monkeypatch.setattr("ilp_gallery.ui.widget.subprocess.Popen", FakePopen)
+    # fake only the gallery's view of subprocess, so the test can still run ffmpeg itself
+    from ilp_gallery.ui import widget
+    monkeypatch.setattr(widget, "subprocess", types.SimpleNamespace(
+        Popen=FakePopen, DEVNULL=subprocess.DEVNULL, PIPE=subprocess.PIPE))
     return calls
 
 
@@ -238,3 +241,39 @@ def test_register_drag_handler_hosts(app):
         assert h.applies("maya") and not h.applies("nuke")
     finally:
         g.cache.shutdown()
+
+
+# -- metadata keys in command templates ------------------------------------------------------
+
+def test_metadata_keys_in_templates(media):
+    from ilp_gallery.ui.tasks import template_keys
+    it = clip_item(media, preview=media.still, movie=media.movie, sg_id=4411)
+    assert format_command("rv {movie}", it) == f"rv {media.movie}"
+    assert format_command("sg --id {sg_id}", it) == "sg --id 4411"
+    assert format_command("x {unknown}", it) == "x {unknown}"                # left as-is
+    # metadata can't override a built-in placeholder
+    shadow = GalleryItem(path=media.clip, metadata={"name": "spoofed", "json": "/x.json"})
+    assert format_command("{name}", shadow) == "run_fwd_001"
+    assert template_keys("rv {movie} --fps {fps}") == {"movie", "fps"}
+    assert template_keys("broken {") == set()
+
+
+@needs_ffmpeg
+def test_gif_scrub_with_movie_for_rv(gallery, launched, media, tmp_path):
+    """The setup from the field: a GIF preview scrubs in the gallery, RV opens the mp4."""
+    gif = tmp_path / "clip.gif"
+    subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=96x54:rate=12:duration=1", "-loop", "0", str(gif)], check=True)
+    frames = thumbs.generate(GalleryItem(**make_record(media.clip, preview=str(gif))), str(tmp_path / "c"), frames=6)
+    assert len(frames) == 6                                                         # scrub frames from the GIF
+    gallery.set_items([make_record(media.clip, id="g", preview=str(gif), movie=media.movie),
+                       make_record(media.clip + "2", id="m", movie=media.movie),      # movie only
+                       make_record(media.clip + "3", id="n")])                        # nothing
+    g, m, n = (gallery.library.get(i) for i in "gmn")
+    assert g.motion == (str(gif), "gif")                                            # GIF scrubs
+    gallery.set_preview_command("rv {movie}")
+    assert gallery.can_preview(g) and gallery.can_preview(m) and not gallery.can_preview(n)
+    assert gallery.preview([g, m, n]) == 2
+    assert launched == [["rv", media.movie], ["rv", media.movie]]
+    gallery.set_preview_command("rv {preview}")
+    assert gallery.can_preview(g) and not gallery.can_preview(m)                    # m has nothing to play

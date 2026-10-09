@@ -58,7 +58,8 @@ class SettingsDialog(QDialog):
         from ..sources.megascans import DEFAULT_ROOT
         self.ms_root = QLineEdit(setting("megascans/root", DEFAULT_ROOT))
 
-        help_ = QLabel("Placeholders: {id} {name} {asset_dir} {json} {path} {type_label} {thumbnail} {preview}<br>"
+        help_ = QLabel("Placeholders: {id} {name} {asset_dir} {json} {path} {type_label} {thumbnail} {preview}, "
+                       "and any metadata key, e.g. {movie}<br>"
                        "Runs once per asset without a shell; output goes to the Export log.",
                        objectName="muted")
         help_.setWordWrap(True)

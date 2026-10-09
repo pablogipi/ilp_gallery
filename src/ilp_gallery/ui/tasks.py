@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import string
 import subprocess
 import threading
 from typing import Callable
@@ -27,15 +28,32 @@ class _Fields(dict):
         return "{" + key + "}"  # unknown placeholders are left as-is
 
 
+BUILTIN_FIELDS = ("id", "name", "path", "type", "asset_dir", "json", "type_label", "thumbnail", "preview")
+
+
 def item_fields(item: GalleryItem) -> dict[str, str]:
+    """Values for command placeholders: the built-in fields, plus every metadata key
+    with a plain value (``{movie}``, ``{sg_id}``...). Built-in names take priority."""
     m = item.metadata
-    return {
+    fields = {
         "id": item.id, "name": item.name, "path": item.path, "type": item.type,
         "asset_dir": m.get("asset_dir") or os.path.dirname(item.path),
         "json": m.get("json") or "", "type_label": m.get("type_label") or item.type,
         "thumbnail": item.thumbnail or "",
         "preview": (item.motion or (item.preview, ""))[0] or item.preview,
     }
+    for key, value in m.items():
+        if key not in fields and isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            fields[key] = value
+    return fields
+
+
+def template_keys(template: str) -> set[str]:
+    """Placeholder names used in a command template ("rv {movie}" -> {"movie"})."""
+    try:
+        return {name for _, name, _, _ in string.Formatter().parse(template) if name}
+    except ValueError:                      # unbalanced braces: treat as no placeholders
+        return set()
 
 
 def format_command(template: str, item: GalleryItem) -> str:

@@ -122,6 +122,15 @@ gallery.set_preview_command("rv {previews}")     # the whole selection in one pl
 
 It runs without a shell and detached, so the player doesn't block the gallery. In the browser it's also in Settings ("Preview command", default `rv {preview}`, or `ILP_GALLERY_PREVIEW_CMD`).
 
+Command templates (export and preview) also accept **any metadata key** with a plain value, so a record can keep a light preview for the gallery and point the player at the full movie:
+
+```python
+make_record(clip, preview=".../clip.gif", movie=".../clip.mp4")   # the GIF scrubs, RV gets the mp4
+gallery.set_preview_command("rv {movie}")
+```
+
+The Preview button and menu entry appear for items that have what the template needs: something to play for `{preview}` / `{previews}`, and the metadata keys it uses (`{movie}`). Built-in placeholders take priority over metadata keys of the same name; unknown placeholders are left as they are.
+
 ## 4. Drag handlers
 
 ```python

@@ -70,6 +70,7 @@ class DetailPanel(QWidget):
         self.preview_btn.setToolTip("Open the preview movie with the preview command")
         self.preview_btn.setVisible(False)
         self._preview_on = False
+        self.can_preview = lambda item: item.motion is not None   # set by the gallery
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
         export_group = QHBoxLayout()
@@ -146,7 +147,7 @@ class DetailPanel(QWidget):
     def set_preview_enabled(self, on: bool) -> None:
         """Show the Preview button (for items with a preview movie) when a command is set."""
         self._preview_on = on
-        self.preview_btn.setVisible(on and self.item is not None and self.item.motion is not None)
+        self.preview_btn.setVisible(on and self.item is not None and self.can_preview(self.item))
 
     def set_export_label(self, label: str, more: bool = False) -> None:
         """Label of the default exporter; ``more`` shows the ▾ menu of other exporters."""
@@ -165,7 +166,7 @@ class DetailPanel(QWidget):
         for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn, self.preview_btn):
             b.setEnabled(has)
         self.player.set_item(item.motion_item() if item is not None else None, autoplay=autoplay)
-        self.preview_btn.setVisible(self._preview_on and item is not None and item.motion is not None)
+        self.preview_btn.setVisible(self._preview_on and item is not None and self.can_preview(item))
         if not has:
             self.title.setText("Select an asset to see its details.")
             self.title.setStyleSheet("font-size: 10pt; font-weight: 600;")

@@ -38,7 +38,7 @@ from .delegate import TileDelegate
 from .details import DetailPanel
 from .model import GalleryModel, ItemRole
 from .search import SearchField, quote_value
-from .tasks import TaskThread, format_command
+from .tasks import BUILTIN_FIELDS, TaskThread, format_command, template_keys
 from .tree import CategoryTree
 
 log = logging.getLogger("ilp_gallery")
@@ -580,19 +580,33 @@ class GalleryWidget(QWidget):
         detached, so the player doesn't block the gallery.
         """
         self.preview_command = (template or "").strip()
+        self.details.can_preview = self.can_preview
         self.details.set_preview_enabled(bool(self.preview_command))
+
+    def can_preview(self, item: GalleryItem) -> bool:
+        """Whether the preview command has what it needs for ``item``: something to play
+        for ``{preview}`` / ``{previews}``, and the metadata keys it uses (``{movie}``)."""
+        if not self.preview_command or item is None:
+            return False
+        for key in template_keys(self.preview_command):
+            if key in ("preview", "previews"):
+                if item.motion is None and not item.preview:
+                    return False
+            elif key not in BUILTIN_FIELDS and not item.metadata.get(key):
+                return False
+        return True
 
     def preview(self, items: list[GalleryItem] | None = None) -> int:
         """Open the preview of ``items`` (default: the selection). Returns how many
         commands were started."""
-        items = [it for it in (items if items is not None else self.selected_items()) if it.motion]
+        items = [it for it in (items if items is not None else self.selected_items()) if self.can_preview(it)]
         if not items or not self.preview_command:
             if not self.preview_command:
                 self.logMessage.emit("No preview command set (Settings, or set_preview_command()).")
             return 0
         template = self.preview_command
         if "{previews}" in template:
-            joined = " ".join(shlex.quote(it.motion[0]) for it in items)
+            joined = " ".join(shlex.quote((it.motion or (it.preview, ""))[0]) for it in items)
             cmds = [format_command(template.replace("{previews}", joined.replace("{", "{{").replace("}", "}}")),
                                    items[0])]
         else:
@@ -746,7 +760,7 @@ class GalleryWidget(QWidget):
                            lambda ex=ex: self.export(items, ex))
         for label, cb in self._actions:
             menu.addAction(label, lambda cb=cb, items=items: cb(items))
-        moving = [it for it in items if it.motion]
+        moving = [it for it in items if self.can_preview(it)]
         if self.preview_command and moving:
             menu.addAction(f"Preview ({len(moving)})" if len(moving) > 1 else "Preview",
                            lambda: self.preview(moving))
