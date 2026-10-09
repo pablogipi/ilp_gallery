@@ -34,6 +34,7 @@ def item_fields(item: GalleryItem) -> dict[str, str]:
         "asset_dir": m.get("asset_dir") or os.path.dirname(item.path),
         "json": m.get("json") or "", "type_label": m.get("type_label") or item.type,
         "thumbnail": item.thumbnail or "",
+        "preview": (item.motion or (item.preview, ""))[0] or item.preview,
     }
 
 

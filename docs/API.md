@@ -28,11 +28,14 @@ make_record(
     category_paths=[["Asset", "chairA", "Model"]],  # hierarchy in the category tree
     display={"Version": 12, "Artist": "pablo"},     # details-panel rows, in order
     tile_aspect=1.0,                       # square tiles (default 16:9)
+    preview="/show/pub/chairA_v012.mp4",   # optional: a movie that scrubs on hover and plays
     version=12, sg_id=4411,                # any extra keys → metadata (meta: search, exporters)
 )
 ```
 
-Reserved `metadata` keys the UI reads: `type_label`, `category_paths`, `display`, `tile_aspect`. On a `GalleryItem` they are also exposed as `item.type_label`, `item.category_paths` and `item.display`. `item.value("json")` reads any field or metadata key.
+Reserved `metadata` keys the UI reads: `type_label`, `category_paths`, `display`, `tile_aspect`, `preview`. On a `GalleryItem` they are also exposed as `item.type_label`, `item.category_paths`, `item.display` and `item.preview`.
+
+**Previews.** Items that don't move themselves (a published clip, a model, a rig) can carry a `preview`. A movie or GIF scrubs on hover, plays in the details panel and gives the tile its poster (first frame) unless a `thumbnail` is set; a still image is used as the thumbnail. `item.motion` is the `(path, type)` that plays: the item itself if it's a movie, else its preview. Items with nothing to show get a warning icon (Houdini's own inside Houdini); `gallery.set_placeholder("icon.svg")` changes it. `item.value("json")` reads any field or metadata key.
 
 ## 2. Data sources
 
@@ -108,6 +111,17 @@ browser.register_exporter(ingest, label="Ingest into project", arg="json",
 
 The callback returns `False`, or raises, to mark an item as failed. The error is logged and the export carries on with the next item. The Settings "Export command" still works too, as a built-in exporter that runs a command template per item.
 
+**Naming the main action.** The Export button shows the default exporter's `label`, so `register_exporter(ingest, label="Ingest", default=True)` gives an "Ingest" button and "Ingest selected" in the toolbar. `gallery.set_export_label("Assign")` renames it regardless of the exporter (`None` restores it); `exportLabelChanged` reports changes.
+
+**Preview command.** Opens an item's preview movie in a player, from the Preview button (shown for items that have something to play), the context menu, or `gallery.preview(items)`:
+
+```python
+gallery.set_preview_command("rv {preview}")      # one player per item
+gallery.set_preview_command("rv {previews}")     # the whole selection in one player
+```
+
+It runs without a shell and detached, so the player doesn't block the gallery. In the browser it's also in Settings ("Preview command", default `rv {preview}`, or `ILP_GALLERY_PREVIEW_CMD`).
+
 ## 4. Drag handlers
 
 ```python
@@ -124,6 +138,14 @@ A handler receives the dragged items and returns one of:
 - `None`, to add nothing
 
 Results are merged on top of the default drag data, which is the file URL of `item.path` plus the JSON records under `application/x-ilp-gallery-items`. Pass `replace_default=True` to drop the default. A handler that raises is logged, and the drag still happens.
+
+**A different drop per DCC.** `hosts=` limits a handler to some applications (`"houdini"`, `"nuke"`, `"maya"`, `"standalone"`), so one setup can register them all and the right one is used:
+
+```python
+g.register_drag_handler(clip_to_houdini, hosts=["houdini"])
+g.register_drag_handler(clip_to_maya, hosts=["maya"], replace_default=True)
+g.register_drag_handler(lambda items: [i.preview for i in items], hosts=["nuke"])   # Nuke gets the movie
+```
 
 `ilp_gallery.dcc.install_host_defaults(gallery)` registers examples per host:
 

@@ -35,6 +35,7 @@ class DetailPanel(QWidget):
     exportRequested = Signal(list)          # [GalleryItem] -> default exporter
     exportMenuRequested = Signal(list, object)  # [GalleryItem], global QPoint -> choose exporter
     copyCommandRequested = Signal(list)
+    previewRequested = Signal(list)         # [GalleryItem] -> the preview command
     openFolderRequested = Signal(object)    # GalleryItem
     categoryClicked = Signal(tuple)
     tagClicked = Signal(str)
@@ -65,6 +66,10 @@ class DetailPanel(QWidget):
         self.more_btn.setVisible(False)
         self.copy_btn = QPushButton("Copy command")
         self.folder_btn = QPushButton("Open folder")
+        self.preview_btn = QPushButton("Preview")
+        self.preview_btn.setToolTip("Open the preview movie with the preview command")
+        self.preview_btn.setVisible(False)
+        self._preview_on = False
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
         export_group = QHBoxLayout()
@@ -72,11 +77,16 @@ class DetailPanel(QWidget):
         export_group.addWidget(self.export_btn)
         export_group.addWidget(self.more_btn)
         buttons.addLayout(export_group)
-        for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn):
+        for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn, self.preview_btn):
             b.setCursor(Qt.PointingHandCursor)
-        buttons.addWidget(self.copy_btn)
-        buttons.addWidget(self.folder_btn)
+        buttons.addWidget(self.preview_btn)
         buttons.addStretch(1)
+        # utilities on a second row, so the panel stays narrow
+        tools = QHBoxLayout()
+        tools.setSpacing(6)
+        tools.addWidget(self.copy_btn)
+        tools.addWidget(self.folder_btn)
+        tools.addStretch(1)
 
         self.info = QLabel("")
         self.info.setWordWrap(True)
@@ -97,6 +107,7 @@ class DetailPanel(QWidget):
         bl.addWidget(self.sub)
         bl.addSpacing(4)
         bl.addLayout(buttons)
+        bl.addLayout(tools)
         bl.addSpacing(6)
         bl.addWidget(self.info)
         bl.addStretch(1)
@@ -118,6 +129,7 @@ class DetailPanel(QWidget):
             [self.item], self.more_btn.mapToGlobal(self.more_btn.rect().bottomLeft())))
         self.copy_btn.clicked.connect(lambda: self.item and self.copyCommandRequested.emit([self.item]))
         self.folder_btn.clicked.connect(lambda: self.item and self.openFolderRequested.emit(self.item))
+        self.preview_btn.clicked.connect(lambda: self.item and self.previewRequested.emit([self.item]))
         self.set_export_enabled(False)
         self.set_item(None)
 
@@ -131,10 +143,15 @@ class DetailPanel(QWidget):
     _export_on = False
     _more = False
 
+    def set_preview_enabled(self, on: bool) -> None:
+        """Show the Preview button (for items with a preview movie) when a command is set."""
+        self._preview_on = on
+        self.preview_btn.setVisible(on and self.item is not None and self.item.motion is not None)
+
     def set_export_label(self, label: str, more: bool = False) -> None:
         """Label of the default exporter; ``more`` shows the ▾ menu of other exporters."""
-        # Long names would push the other buttons off the panel: keep them in the tooltip.
-        self.export_btn.setText(label if len(label) <= 14 else "Export")
+        # Very long names would push the other buttons off the panel: elide, full text in the tooltip.
+        self.export_btn.setText(label if len(label) <= 24 else label[:23].rstrip() + "…")
         self.export_btn.setToolTip(label)
         self._more = more
         self.more_btn.setVisible(self._export_on and more)
@@ -145,9 +162,10 @@ class DetailPanel(QWidget):
         has = item is not None
         self.player.setVisible(has)
         self.empty.setVisible(False)
-        for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn):
+        for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn, self.preview_btn):
             b.setEnabled(has)
-        self.player.set_item(item, autoplay=autoplay)
+        self.player.set_item(item.motion_item() if item is not None else None, autoplay=autoplay)
+        self.preview_btn.setVisible(self._preview_on and item is not None and item.motion is not None)
         if not has:
             self.title.setText("Select an asset to see its details.")
             self.title.setStyleSheet("font-size: 10pt; font-weight: 600;")

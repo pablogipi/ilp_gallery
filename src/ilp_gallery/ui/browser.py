@@ -24,12 +24,16 @@ from .widget import GalleryWidget
 ORG, APP = "ILPvfx", "ILPGallery"
 
 
+DEFAULT_PREVIEW_COMMAND = "rv {preview}"
+
+
 def settings() -> QSettings:
     return QSettings(ORG, APP)
 
 
 def setting(key: str, default: str = "") -> str:
-    env = {"export/command": "ILP_GALLERY_EXPORT_CMD", "megascans/root": "ILP_MEGASCANS_ROOT",
+    env = {"export/command": "ILP_GALLERY_EXPORT_CMD", "preview/command": "ILP_GALLERY_PREVIEW_CMD",
+           "megascans/root": "ILP_MEGASCANS_ROOT",
            "library/sources": "ILP_GALLERY_LIBRARY"}.get(key)
     value = settings().value(key, "")
     return str(value or (os.environ.get(env, "") if env else "") or default)
@@ -42,6 +46,8 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(620)
         self.cmd = QLineEdit(setting("export/command"))
         self.cmd.setPlaceholderText("e.g. stockpile export --asset {asset_dir}")
+        self.preview_cmd = QLineEdit(setting("preview/command", DEFAULT_PREVIEW_COMMAND))
+        self.preview_cmd.setPlaceholderText("e.g. rv {preview}   ·   rv {previews} opens a selection in one RV")
         self.sources = QLineEdit(setting("library/sources"))
         self.sources.setPlaceholderText("library JSON files or folders, ':' separated")
         browse = QPushButton("Browse…")
@@ -52,13 +58,14 @@ class SettingsDialog(QDialog):
         from ..sources.megascans import DEFAULT_ROOT
         self.ms_root = QLineEdit(setting("megascans/root", DEFAULT_ROOT))
 
-        help_ = QLabel("Placeholders: {id} {name} {asset_dir} {json} {path} {type_label} {thumbnail}<br>"
+        help_ = QLabel("Placeholders: {id} {name} {asset_dir} {json} {path} {type_label} {thumbnail} {preview}<br>"
                        "Runs once per asset without a shell; output goes to the Export log.",
                        objectName="muted")
         help_.setWordWrap(True)
         form = QFormLayout()
         form.addRow("Export command", self.cmd)
         form.addRow("", help_)
+        form.addRow("Preview command", self.preview_cmd)
         form.addRow("Default library", src_row)
         form.addRow("Megascans root", self.ms_root)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -76,6 +83,7 @@ class SettingsDialog(QDialog):
     def accept(self) -> None:
         s = settings()
         s.setValue("export/command", self.cmd.text().strip())
+        s.setValue("preview/command", self.preview_cmd.text().strip())
         s.setValue("library/sources", self.sources.text().strip())
         s.setValue("megascans/root", self.ms_root.text().strip())
         super().accept()
@@ -122,9 +130,12 @@ class GalleryBrowser(QMainWindow):
         self.gallery.themeChanged.connect(self._restyle)
         self.gallery.set_export_enabled(True)
         self.gallery.command_template = setting("export/command")
+        self.gallery.set_preview_command(setting("preview/command", DEFAULT_PREVIEW_COMMAND))
 
         # toolbar buttons (right of the search bar)
-        self.export_btn = self.gallery.add_toolbar_button("Export selected", self.export_selected)
+        self.export_btn = self.gallery.add_toolbar_button(f"{self.gallery.export_label()} selected",
+                                                          self.export_selected)
+        self.gallery.exportLabelChanged.connect(lambda label: self.export_btn.setText(f"{label} selected"))
         self.rescan_btn = self.gallery.add_toolbar_button("Rescan library", self.rescan)
         self.gallery.add_toolbar_button("Settings", self.open_settings)
 
@@ -279,7 +290,9 @@ class GalleryBrowser(QMainWindow):
         self.theme.polish(dlg)
         if dlg.exec():
             self.gallery.command_template = setting("export/command")
+            self.gallery.set_preview_command(setting("preview/command", DEFAULT_PREVIEW_COMMAND))
             self.log(f"Export command: {self.gallery.command_template or '(none)'}")
+            self.log(f"Preview command: {self.gallery.preview_command or '(none)'}")
 
     def stop_task(self) -> None:
         self.gallery.stop_task()

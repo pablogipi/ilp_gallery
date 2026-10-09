@@ -22,6 +22,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "ilp_gallery.ui.sgi" = ["fonts/*.ttf", "fonts/OFL.txt"]
+"ilp_gallery.ui" = ["icons/*.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

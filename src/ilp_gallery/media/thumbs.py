@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import itertools
 import logging
@@ -114,6 +115,14 @@ def generate(item: GalleryItem, cache_dir: str, width: int = THUMB_WIDTH,
                 dst = os.path.join(out, "f001.jpg")
                 img.convertToFormat(QImage.Format_RGB888).save(dst, "JPG", 88)
                 return [dst]
+    # Items that don't move themselves (a published clip, a model...) can carry a
+    # preview: a movie / GIF gives the scrub frames and, without a thumbnail, the
+    # poster; a still image is used as the thumbnail.
+    if not item.is_animated and item.preview and os.path.exists(item.preview):
+        if item.motion is not None:
+            item = item.motion_item()
+        elif not (item.thumbnail and os.path.exists(item.thumbnail)):
+            item = dataclasses.replace(item, thumbnail=item.preview)
     n = frames if item.is_animated else 1
     key = _cache_key(item.path, width, n)
     if key is None:

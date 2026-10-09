@@ -1,0 +1,13 @@
+<!-- ILP Gallery: placeholder for items without a thumbnail (warning triangle, up arrow) -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="y" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f3dc4a"/><stop offset="1" stop-color="#d9b818"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded warning triangle with a dark rim -->
+  <path d="M32 6 C34 6 35.3 7 36.4 8.9 L60 51.2 C61.9 54.6 59.9 58 56 58 L8 58 C4.1 58 2.1 54.6 4 51.2 L27.6 8.9 C28.7 7 30 6 32 6 Z"
+        fill="url(#y)" stroke="#2a2a2a" stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- up arrow -->
+  <path d="M32 19 L44 33 L36.5 33 L36.5 49 L27.5 49 L27.5 33 L20 33 Z" fill="#141414"/>
+</svg>

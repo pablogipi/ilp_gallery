@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import traceback
 from typing import Callable, Iterable
@@ -22,7 +23,7 @@ from typing import Callable, Iterable
 import time
 
 from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, QObject, QRunnable, QThreadPool, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMenu, QPushButton, QSlider, QSplitter, QVBoxLayout, QWidget,
 )
@@ -41,6 +42,22 @@ from .tasks import TaskThread, format_command
 from .tree import CategoryTree
 
 log = logging.getLogger("ilp_gallery")
+
+PLACEHOLDER_SVG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "missing.svg")
+
+
+def default_placeholder() -> QIcon:
+    """Icon for items without a thumbnail: Houdini's own warning icon inside Houdini
+    (loaded from the Houdini install), the bundled one elsewhere."""
+    if theme_mod.detect_host() == "houdini":
+        try:
+            import hou
+            icon = hou.qt.Icon("BUTTONS_list_warning_up")
+            if icon is not None and not icon.isNull():
+                return icon
+        except Exception:
+            pass
+    return QIcon(PLACEHOLDER_SVG)
 
 
 def format_traceback(exc: BaseException) -> str:
@@ -94,6 +111,7 @@ class _AppPaletteWatcher(QObject):
 
 class GalleryWidget(QWidget):
     itemActivated = Signal(object)        # GalleryItem (double-click / Enter)
+    exportLabelChanged = Signal(str)      # label of the main action ("Export", "Ingest", ...)
     themeChanged = Signal(object)         # Theme
     selectionChanged = Signal(list)       # list[GalleryItem]
     currentChanged = Signal(object)       # GalleryItem | None (shown in details)
@@ -141,6 +159,8 @@ class GalleryWidget(QWidget):
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(4)
         self._export_enabled = False
+        self._export_label: str | None = None          # set_export_label() override
+        self.preview_command = ""                       # e.g. "rv {preview}"
         self._path_filter: tuple = ()
         self._search_ids: list[str] = []
 
@@ -165,9 +185,11 @@ class GalleryWidget(QWidget):
         # -- panes -------------------------------------------------------
         self.tree = CategoryTree()
         self.model = GalleryModel(self.library, self)
-        self.model.mime_builder = lambda items: build_mime(items, self._drag_handlers, self.logMessage.emit)
+        self.model.mime_builder = lambda items: build_mime(items, self._drag_handlers, self.logMessage.emit,
+                                                           host=theme_mod.detect_host())
         self.cache.thumbnail_provider = self._source_thumbnail
         self.delegate = TileDelegate(self.cache, self)
+        self.delegate.placeholder = default_placeholder()
         self.view = GalleryView(self.delegate)
         self.view.setStyleSheet("")
         self.view.setModel(self.model)
@@ -209,6 +231,7 @@ class GalleryWidget(QWidget):
         self.details.exportRequested.connect(lambda items: self.export(items))
         self.details.exportMenuRequested.connect(self._export_menu)
         self.details.copyCommandRequested.connect(self.copy_command)
+        self.details.previewRequested.connect(self.preview)
         self.details.openFolderRequested.connect(lambda it: _open(_folder(it)))
         self.details.categoryClicked.connect(self.tree.select_path)
         self.details.tagClicked.connect(lambda t: self.search.toggle_token(f"tag:{quote_value(t)}"))
@@ -384,6 +407,7 @@ class GalleryWidget(QWidget):
         self._exporters.append(ex)
         if default or self._default_exporter is None:
             self._default_exporter = ex
+            self.exportLabelChanged.emit(self.export_label())
         self.set_export_enabled(True)
         self._show_current(self.view.currentIndex(), force=True)
         return ex
@@ -434,9 +458,15 @@ class GalleryWidget(QWidget):
     # ---------------------------------------------------------------- drag
     def register_drag_handler(self, fn: Callable[[list[GalleryItem]], object],
                               replace_default: bool = False,
-                              sources: Iterable[str] | None = None) -> DragHandler:
-        """Add data to drags out of the gallery (see ``ilp_gallery.ui.actions``)."""
-        h = DragHandler(fn, replace_default, tuple(sources) if sources is not None else None)
+                              sources: Iterable[str] | None = None,
+                              hosts: Iterable[str] | None = None) -> DragHandler:
+        """Add data to drags out of the gallery (see ``ilp_gallery.ui.actions``).
+
+        ``hosts``: only use this handler inside these applications ("houdini", "nuke",
+        "maya", "standalone"), so one setup can register a different drop per DCC.
+        """
+        h = DragHandler(fn, replace_default, tuple(sources) if sources is not None else None,
+                        tuple(x.lower() for x in hosts) if hosts is not None else None)
         self._drag_handlers.append(h)
         return h
 
@@ -513,6 +543,70 @@ class GalleryWidget(QWidget):
         b.clicked.connect(callback)
         self.toolbar.addWidget(b)
         return b
+
+    # ---------------------------------------------------------------- main action label
+    def export_label(self) -> str:
+        """Label of the main action: the override, else the default exporter's."""
+        d = self._default_exporter
+        return self._export_label or (d.label if d is not None else "Export")
+
+    def set_export_label(self, label: str | None) -> None:
+        """Rename the main action in the UI ("Ingest", "Assign"...); None restores
+        the default exporter's own label."""
+        self._export_label = label or None
+        self._show_current(self.view.currentIndex(), force=True)
+        self.exportLabelChanged.emit(self.export_label())
+
+    # ---------------------------------------------------------------- placeholder
+    def set_placeholder(self, icon: "QIcon | QPixmap | str | None") -> None:
+        """Icon for items without a thumbnail: a QIcon, QPixmap or image path;
+        None restores the default."""
+        if icon is None:
+            icon = default_placeholder()
+        elif isinstance(icon, str):
+            icon = QIcon(os.path.expandvars(os.path.expanduser(icon)))
+        elif isinstance(icon, QPixmap):
+            icon = QIcon(icon)
+        self.delegate.placeholder = icon
+        self.view.viewport().update()
+
+    # ---------------------------------------------------------------- preview
+    def set_preview_command(self, template: str | None) -> None:
+        """Command that opens an item's preview movie, e.g. ``"rv {preview}"``.
+
+        Placeholders as for the export command, plus ``{preview}`` (the preview
+        movie, or the item itself if it's a movie). Use ``{previews}`` to open all
+        selected previews in one call (``"rv {previews}"``). Runs without a shell,
+        detached, so the player doesn't block the gallery.
+        """
+        self.preview_command = (template or "").strip()
+        self.details.set_preview_enabled(bool(self.preview_command))
+
+    def preview(self, items: list[GalleryItem] | None = None) -> int:
+        """Open the preview of ``items`` (default: the selection). Returns how many
+        commands were started."""
+        items = [it for it in (items if items is not None else self.selected_items()) if it.motion]
+        if not items or not self.preview_command:
+            if not self.preview_command:
+                self.logMessage.emit("No preview command set (Settings, or set_preview_command()).")
+            return 0
+        template = self.preview_command
+        if "{previews}" in template:
+            joined = " ".join(shlex.quote(it.motion[0]) for it in items)
+            cmds = [format_command(template.replace("{previews}", joined.replace("{", "{{").replace("}", "}}")),
+                                   items[0])]
+        else:
+            cmds = [format_command(template, it) for it in items]
+        started = 0
+        for cmd in cmds:
+            try:
+                subprocess.Popen(shlex.split(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+                self.logMessage.emit(f"Preview: {cmd}")
+                started += 1
+            except (OSError, ValueError) as exc:
+                self.logMessage.emit(f"ERROR preview: {cmd}: {exc}")
+        return started
 
     def set_export_enabled(self, on: bool) -> None:
         """Show Export / Copy command (automatic once an exporter is registered)."""
@@ -610,8 +704,8 @@ class GalleryWidget(QWidget):
         if item is not None:
             exs = self.exporters([item])
             d = self._default_exporter
-            self.details.set_export_label(d.label if d in exs else (exs[0].label if exs else "Export"),
-                                          more=len(exs) > 1)
+            label = self._export_label or (d.label if d in exs else (exs[0].label if exs else "Export"))
+            self.details.set_export_label(label, more=len(exs) > 1)
         self.details.set_item(item)
         self.currentChanged.emit(item)
 
@@ -652,6 +746,10 @@ class GalleryWidget(QWidget):
                            lambda ex=ex: self.export(items, ex))
         for label, cb in self._actions:
             menu.addAction(label, lambda cb=cb, items=items: cb(items))
+        moving = [it for it in items if it.motion]
+        if self.preview_command and moving:
+            menu.addAction(f"Preview ({len(moving)})" if len(moving) > 1 else "Preview",
+                           lambda: self.preview(moving))
         menu.addSeparator()
         if self._export_enabled:
             menu.addAction("Copy command", lambda: self.copy_command(items))

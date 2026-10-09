@@ -31,6 +31,7 @@ class TileDelegate(QStyledItemDelegate):
         self.tile_width = 170
         self.aspect = 16 / 9
         self.hover_id: str | None = None
+        self.placeholder = None                # QIcon for items without a thumbnail
         self.hover_fraction = 0.0
         self.set_theme(theme.ILP)
 
@@ -80,7 +81,8 @@ class TileDelegate(QStyledItemDelegate):
 
         # image: scrub frame while hovering animated media, poster otherwise
         pix = None
-        if hovered and item.is_animated:
+        moves = item.motion is not None          # a movie / GIF itself, or a preview movie
+        if hovered and moves:
             frames = self.cache.frames(item)
             if frames:
                 pix = frames[min(len(frames) - 1, int(self.hover_fraction * len(frames)))]
@@ -96,16 +98,15 @@ class TileDelegate(QStyledItemDelegate):
             target = QRect(0, 0, scaled.width(), scaled.height())
             target.moveCenter(img_rect.center())
             p.drawPixmap(target, pix)
-        else:
-            p.setPen(self._muted)
-            p.drawText(img_rect, Qt.AlignCenter, "no preview" if self.cache.failed(item.id) else "")
+        elif self.cache.failed(item.id):
+            self._paint_placeholder(p, img_rect)
         p.setClipping(False)
 
-        if hovered and item.is_animated:
+        if hovered and moves:
             p.fillRect(QRect(img_rect.left(), img_rect.bottom() - 2,
                              int(img_rect.width() * self.hover_fraction), 3), self._accent)
 
-        badge = BADGE.get(item.type)
+        badge = BADGE.get(item.motion[1] if moves else item.type)
         if badge:
             f = QFont(option.font)
             f.setPointSizeF(max(6.5, f.pointSizeF() * 0.75))
@@ -173,3 +174,15 @@ class TileDelegate(QStyledItemDelegate):
             p.setPen(QPen(self._accent, 2))
             p.drawRect(card.adjusted(3, 3, -2, -2))
         p.restore()
+
+    def _paint_placeholder(self, p: QPainter, img_rect: QRect) -> None:
+        """The 'no thumbnail' icon, centred at a modest size; text if there's no icon."""
+        icon = self.placeholder
+        if icon is None or icon.isNull():
+            p.setPen(self._muted)
+            p.drawText(img_rect, Qt.AlignCenter, "no preview")
+            return
+        side = max(16, min(64, int(img_rect.height() * 0.42)))
+        target = QRect(0, 0, side, side)
+        target.moveCenter(img_rect.center())
+        icon.paint(p, target)

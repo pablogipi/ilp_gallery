@@ -23,6 +23,7 @@ file stem and ``type`` is guessed from the extension.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -117,6 +118,34 @@ class GalleryItem:
     @property
     def display(self) -> list[list[Any]]:
         return self.metadata.get("display") or []
+
+    @property
+    def preview(self) -> str:
+        """Preview media for the item (``metadata["preview"]``), e.g. a small mp4 next
+        to a published asset. Empty if none."""
+        p = self.metadata.get("preview") or ""
+        return os.path.expandvars(os.path.expanduser(str(p))) if p else ""
+
+    @property
+    def motion(self) -> tuple[str, str] | None:
+        """(path, media type) of what plays and scrubs for this item: the item itself
+        if it's a movie or GIF, otherwise its preview movie / GIF. None if neither."""
+        if self.is_animated:
+            return self.path, self.type
+        p = self.preview
+        if p:
+            t = guess_media_type(p)
+            if t in (MEDIA_MOVIE, MEDIA_GIF):
+                return p, t
+        return None
+
+    def motion_item(self) -> "GalleryItem":
+        """The item as it should be played: same item, with its path and type swapped
+        for the preview movie when the item itself doesn't move."""
+        m = self.motion
+        if m is None or m[0] == self.path:
+            return self
+        return dataclasses.replace(self, path=m[0], type=m[1])
 
     def value(self, key: str) -> Any:
         """A field or metadata value by name: "path", "id", "json", "asset_dir", ..."""

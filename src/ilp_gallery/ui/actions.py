@@ -166,6 +166,10 @@ class DragHandler:
     fn: Callable[[list[GalleryItem]], Any]
     replace_default: bool = False
     sources: tuple[str, ...] | None = None
+    hosts: tuple[str, ...] | None = None     # "houdini", "nuke", "maya", "standalone"; None = any
+
+    def applies(self, host: str | None) -> bool:
+        return self.hosts is None or host is None or host in self.hosts
 
 
 def default_mime(items: list[GalleryItem]) -> QMimeData:
@@ -205,8 +209,11 @@ def _merge(md: QMimeData, result: Any) -> None:
     raise TypeError(f"Drag handler returned unsupported {type(result).__name__}")
 
 
-def build_mime(items: list[GalleryItem], handlers: Iterable[DragHandler], log=None) -> QMimeData:
-    handlers = list(handlers)
+def build_mime(items: list[GalleryItem], handlers: Iterable[DragHandler], log=None,
+               host: str | None = None) -> QMimeData:
+    """Drag data for ``items``: the default data plus what the handlers for ``host``
+    add (handlers registered for other hosts are skipped)."""
+    handlers = [h for h in handlers if h.applies(host)]
     replace = any(h.replace_default for h in handlers)
     md = QMimeData() if replace else default_mime(items)
     for h in handlers:
