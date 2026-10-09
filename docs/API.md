@@ -180,3 +180,29 @@ browser.set_theme("ilp")                            # switch live
 `ILP_GALLERY_THEME=auto|host|ilp` overrides what `"auto"` picks; an explicit `theme=` argument still wins. `browser.theme` is the `Theme` in use. `gallery.refresh_theme()` re-reads the host's colours by hand, and `gallery.themeChanged` fires with the new `Theme`.
 
 > Houdini Light was checked against values reported from a real session; the Nuke and Maya looks with palettes like theirs.
+
+### SGI themes
+
+A modern take on IRIX's Indigo Magic look, in `ilp_gallery.ui.sgi`:
+
+```python
+make_browser(theme="sgi")         # light IRIX look: warm greys, slate-blue desktop, salmon fields
+make_browser(theme="sgi-dark")    # the same widgets in Autodesk Flame's palette
+make_browser(theme="sgi-slate")   # blue-slate dark variant
+
+from ilp_gallery.ui.sgi import SGI
+make_browser(theme=SGI.replace(accent="#2a7f62"))
+```
+
+What they add beyond colours:
+
+- Motif bevels with mitered corners, the embossed IRIX check mark, diamond radio buttons with the blue arrow, flush sliders, slanted italic tabs, bevelled tiles.
+- Scrollbars outside their list's frame, with square three-step buttons and a ridged thumb.
+- IRIX shortcut marks: a small staircase under the mnemonic letter (`"&File"`) instead of an underline, in menus, labels, check boxes and buttons. Submenus are marked with the Toolchest cabinet.
+- IBM Plex Sans and Plex Mono at 9.5pt, bundled (SIL Open Font License, `ui/sgi/fonts/OFL.txt`) and registered for the application only.
+
+The pieces are generated as SVGs from the theme's colours into `~/.cache/ilp_gallery/sgi` (set `ILP_GALLERY_SGI_CACHE` to move it). Details a stylesheet can't express (detached scrollbars, shortcut marks) come from a small proxy style that the theme installs on the gallery's own widgets only; switching to another theme removes it again. The host application's widgets are never touched.
+
+Menus you create yourself inside the gallery get the shortcut marks with `gallery.theme.polish_menu(menu)` (a no-op for other themes).
+
+`ThumbWheel` is the IRIX thumbwheel as a `QAbstractSlider`, for your own tools: `ThumbWheel(Qt.Horizontal, theme)`. It works with any theme.

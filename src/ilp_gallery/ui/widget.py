@@ -236,10 +236,16 @@ class GalleryWidget(QWidget):
             self._apply_theme(new)
 
     def _apply_theme(self, t: "theme_mod.Theme") -> None:
+        old = getattr(self, "_polished_theme", None)
+        if old is not None and type(old) is not type(t):
+            old.unpolish(self)
+            self._polished_theme = None
         self.theme = t
         if self._styled_root:
             self.setPalette(self.theme.qpalette())
             self.setStyleSheet(self.theme.stylesheet())
+            self.theme.polish(self)
+            self._polished_theme = self.theme
         self.delegate.set_theme(self.theme)
         self.tree.set_theme(self.theme)
         self.details.set_theme(self.theme)
@@ -623,6 +629,7 @@ class GalleryWidget(QWidget):
             return
         n = len(items)
         menu = QMenu(self)
+        self.theme.polish_menu(menu)
         for ex in self.exporters(items):
             menu.addAction(f"{ex.label} ({n})" if n > 1 else ex.label,
                            lambda ex=ex: self.export(items, ex))
@@ -637,6 +644,7 @@ class GalleryWidget(QWidget):
         menu.addAction("Open folder", lambda: _open(_folder(items[0])))
         if items[0].tags:
             sub = menu.addMenu("Filter by tag")
+            self.theme.polish_menu(sub)
             for t in items[0].tags[:30]:
                 sub.addAction(t, lambda t=t: self.search.toggle_token(f"tag:{quote_value(t)}"))
         menu.addSeparator()
@@ -645,6 +653,7 @@ class GalleryWidget(QWidget):
 
     def _export_menu(self, items: list[GalleryItem], pos) -> None:
         menu = QMenu(self)
+        self.theme.polish_menu(menu)
         for ex in self.exporters(items):
             menu.addAction(ex.label, lambda ex=ex: self.export(items, ex))
         menu.exec(pos)

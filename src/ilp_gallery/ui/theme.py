@@ -11,9 +11,11 @@ same object. Pick one with ``theme=`` on GalleryBrowser / GalleryWidget /
   (``hou.qt.getColor``), the running application's QPalette elsewhere.
   "auto" and "host" follow the host when its colours change.
 * ``"ilp"``: the built-in ILP look.
+* ``"sgi"``, ``"sgi-dark"``, ``"sgi-slate"``: the SGI / IRIX look
+  (see :mod:`ilp_gallery.ui.sgi`).
 * a :class:`Theme`, e.g. ``ILP.replace(accent="#e08a3d")``.
 
-The environment variable ``ILP_GALLERY_THEME=auto|host|ilp`` overrides the
+The environment variable ``ILP_GALLERY_THEME=auto|host|ilp|sgi|...`` overrides the
 default for "auto".
 """
 
@@ -71,6 +73,20 @@ class Theme:
         for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
             p.setColor(QPalette.Disabled, role, QColor(self.muted))
         return p
+
+    # Hooks for themes that need more than colours and a stylesheet (see ilp_gallery.ui.sgi).
+    def polish(self, root) -> None:
+        """Called after the stylesheet is applied to ``root`` (a widget tree)."""
+
+    def unpolish(self, root) -> None:
+        """Undo :meth:`polish` when ``root`` switches to another theme."""
+
+    def polish_menu(self, menu) -> None:
+        """Called for drop-down / context menus the gallery creates."""
+
+    def tile_bevel(self):
+        """(light, light2, dark2, dark) QColors to bevel the tiles with, or None."""
+        return None
 
     def stylesheet(self) -> str:
         return _STYLESHEET.format(
@@ -240,7 +256,12 @@ def resolve(theme: "Theme | str | None" = None) -> Theme:
         return host_theme()
     if choice == "ilp":
         return ILP
-    raise ValueError(f"Unknown theme {theme!r}: use 'auto', 'host', 'ilp' or a Theme")
+    if choice.startswith("sgi"):
+        from .sgi import PRESETS
+        if choice in PRESETS:
+            return PRESETS[choice]
+    raise ValueError(f"Unknown theme {theme!r}: use 'auto', 'host', 'ilp', 'sgi', 'sgi-dark', "
+                     "'sgi-slate' or a Theme")
 
 
 _STYLESHEET = """

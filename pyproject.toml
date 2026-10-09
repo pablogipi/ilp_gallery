@@ -20,5 +20,8 @@ ilp-gallery = "ilp_gallery.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"ilp_gallery.ui.sgi" = ["fonts/*.ttf", "fonts/OFL.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

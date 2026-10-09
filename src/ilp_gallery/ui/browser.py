@@ -255,8 +255,17 @@ class GalleryBrowser(QMainWindow):
         return self.gallery.theme
 
     def _restyle(self, t: "theme_mod.Theme") -> None:
+        old = getattr(self, "_polished_theme", None)
+        if old is not None and type(old) is not type(t):
+            old.unpolish(self)
         self.setPalette(t.qpalette())
         self.setStyleSheet(t.stylesheet())
+        t.polish(self)                  # e.g. the SGI theme's proxy style and menu marks
+        self._polished_theme = t
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.theme.polish(self)         # widgets created since the theme was applied
 
     def set_theme(self, theme: "theme_mod.Theme | str | None") -> None:
         """Switch colours live: "auto", "host", "ilp" or a Theme."""
@@ -265,6 +274,7 @@ class GalleryBrowser(QMainWindow):
     def open_settings(self) -> None:
         dlg = SettingsDialog(self)
         dlg.setStyleSheet(self.theme.stylesheet())
+        self.theme.polish(dlg)
         if dlg.exec():
             self.gallery.command_template = setting("export/command")
             self.log(f"Export command: {self.gallery.command_template or '(none)'}")

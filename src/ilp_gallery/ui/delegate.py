@@ -41,6 +41,7 @@ class TileDelegate(QStyledItemDelegate):
         self._accent = t.c("accent")
         self._text = t.c("text")
         self._muted = t.c("muted")
+        self._bevel = t.tile_bevel()          # SGI themes: Motif-bevelled square tiles
 
     # -- geometry ------------------------------------------------------
     def image_height(self) -> int:
@@ -72,8 +73,9 @@ class TileDelegate(QStyledItemDelegate):
         card = QRectF(self.card_rect(option.rect))
         img_rect = self.image_rect(option.rect)
 
+        radius = 0 if self._bevel else self.RADIUS
         path = QPainterPath()
-        path.addRoundedRect(card, self.RADIUS, self.RADIUS)
+        path.addRoundedRect(card, radius, radius)
         p.fillPath(path, self._tile_hover if (hovered or selected) else self._tile)
 
         # image: scrub frame while hovering animated media, poster otherwise
@@ -86,7 +88,7 @@ class TileDelegate(QStyledItemDelegate):
             pix = self.cache.poster(item)  # queues generation if missing
 
         clip = QPainterPath()
-        clip.addRoundedRect(QRectF(img_rect), 3, 3)
+        clip.addRoundedRect(QRectF(img_rect), 0 if self._bevel else 3, 0 if self._bevel else 3)
         p.setClipPath(clip)
         p.fillRect(img_rect, self._image_bg)
         if pix is not None and not pix.isNull():
@@ -134,8 +136,40 @@ class TileDelegate(QStyledItemDelegate):
         p.drawText(QRect(x, y + nfm.height(), w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
                    sfm.elidedText(subtitle(item), Qt.ElideRight, w))
 
-        if selected:
+        if self._bevel:
+            self._paint_bevel(p, option.rect, selected)
+        elif selected:
             p.setPen(QPen(self._accent, 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(card.adjusted(1, 1, -1, -1), self.RADIUS, self.RADIUS)
+        p.restore()
+
+    def _paint_bevel(self, p: QPainter, cell: QRect, selected: bool) -> None:
+        """Two-step Motif bevel round the card (pressed in when selected, with an accent
+        frame) and a sunken frame round the image."""
+        hl, hl2, sh2, sh = self._bevel
+        card = self.card_rect(cell).adjusted(0, 0, -1, -1)
+        img = self.image_rect(cell).adjusted(-2, -2, 1, 1)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, False)
+        p.setBrush(Qt.NoBrush)
+
+        def bevel(r: QRect, outer_tl, inner_tl, inner_br, outer_br) -> None:
+            for i, (tl, br) in enumerate(((outer_tl, outer_br), (inner_tl, inner_br))):
+                rr = r.adjusted(i, i, -i, -i)
+                p.setPen(QPen(tl, 1))
+                p.drawLine(rr.topLeft(), rr.topRight())
+                p.drawLine(rr.topLeft(), rr.bottomLeft())
+                p.setPen(QPen(br, 1))
+                p.drawLine(rr.bottomLeft(), rr.bottomRight())
+                p.drawLine(rr.topRight(), rr.bottomRight())
+
+        if selected:
+            bevel(card, sh, sh2, hl2, hl)
+        else:
+            bevel(card, hl, hl2, sh2, sh)
+        bevel(img, sh, sh2, hl2, hl)
+        if selected:
+            p.setPen(QPen(self._accent, 2))
+            p.drawRect(card.adjusted(3, 3, -2, -2))
         p.restore()
