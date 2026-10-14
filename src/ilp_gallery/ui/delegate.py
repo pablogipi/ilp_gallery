@@ -12,6 +12,7 @@ from . import theme
 from .model import ItemRole
 
 BADGE = {MEDIA_MOVIE: "MOV", MEDIA_GIF: "GIF"}
+OUTDATED = QColor("#e0a030")      # matches the drawer's outdated colour
 TYPE_NAMES = {"image": "Image", "gif": "GIF", "movie": "Movie"}
 
 
@@ -33,6 +34,7 @@ class TileDelegate(QStyledItemDelegate):
         self.hover_id: str | None = None
         self.placeholder = None                # QIcon for items without a thumbnail
         self.hover_fraction = 0.0
+        self.marks: dict[str, tuple[bool, str]] = {}   # item id -> (enabled, drawer state)
         self.set_theme(theme.ILP)
 
     def set_theme(self, t: theme.Theme) -> None:
@@ -120,6 +122,10 @@ class TileDelegate(QStyledItemDelegate):
             p.setPen(QColor(235, 235, 235))
             p.drawText(r, Qt.AlignCenter, badge)
 
+        mark = self.marks.get(item.id)
+        if mark is not None:
+            self._paint_mark(p, img_rect, *mark)
+
         # name + subtitle
         name_font = QFont(option.font)
         name_font.setWeight(QFont.DemiBold)
@@ -173,6 +179,34 @@ class TileDelegate(QStyledItemDelegate):
         if selected:
             p.setPen(QPen(self._accent, 2))
             p.drawRect(card.adjusted(3, 3, -2, -2))
+        p.restore()
+
+    def _paint_mark(self, p: QPainter, img_rect: QRect, enabled: bool, state: str) -> None:
+        """Drawer badge, top right: a filled disc with a tick when enabled, a ring when
+        disabled; orange instead of the accent when the drawer's path is outdated."""
+        d = max(12, min(20, img_rect.height() // 6))
+        r = QRectF(img_rect.right() - d - 5, img_rect.top() + 5, d, d)
+        color = OUTDATED if state == "outdated" else self._accent
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor(0, 0, 0, 150), 1.0))
+        p.setBrush(QColor(0, 0, 0, 120))
+        p.drawEllipse(r.adjusted(-1.5, -1.5, 1.5, 1.5))      # dark halo: readable on any image
+        if enabled:
+            p.setPen(Qt.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(r)
+            tick = QPainterPath()
+            tick.moveTo(r.left() + d * 0.27, r.top() + d * 0.53)
+            tick.lineTo(r.left() + d * 0.44, r.top() + d * 0.70)
+            tick.lineTo(r.left() + d * 0.75, r.top() + d * 0.33)
+            p.setPen(QPen(QColor(255, 255, 255), max(1.5, d / 8), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(tick)
+        else:
+            p.setPen(QPen(color, max(1.5, d / 7)))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(r.adjusted(1, 1, -1, -1))
         p.restore()
 
     def _paint_placeholder(self, p: QPainter, img_rect: QRect) -> None:

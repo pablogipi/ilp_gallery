@@ -146,7 +146,7 @@ A handler receives the dragged items and returns one of:
 - a `QMimeData`
 - `None`, to add nothing
 
-Results are merged on top of the default drag data, which is the file URL of `item.path` plus the JSON records under `application/x-ilp-gallery-items`. Pass `replace_default=True` to drop the default. A handler that raises is logged, and the drag still happens.
+Results are merged on top of the default drag data, which is the file URL of `item.path` plus the JSON records under `application/x-ilp-gallery-items`. Pass `replace_default=True` to drop the default file URL and text; the JSON records are always kept, because the drawer reads them. A handler that raises is logged, and the drag still happens.
 
 **A different drop per DCC.** `hosts=` limits a handler to some applications (`"houdini"`, `"nuke"`, `"maya"`, `"standalone"`), so one setup can register them all and the right one is used:
 
@@ -169,7 +169,29 @@ The host exporters run with `threaded=False`, since they call the host's scene A
 
 > These host examples haven't been run inside Houdini, Nuke or Maya yet: treat them as starting points.
 
-## 5. Library files and performance
+## 5. Drawer
+
+A pane to the right of the tiles that collects chosen items: a batch to process, or the clip list of a host node.
+
+```python
+g = GalleryWidget(drawer=True, drawer_key="name", drawer_title="Clips")
+g.drawerChanged.connect(lambda entries: save(entries))     # edits made in the drawer UI
+g.set_drawer(load())                                         # silent: no drawerChanged
+```
+
+- **Entries** are `DrawerEntry(key, path, enabled)`. `key` is the value of the `drawer_key` field (default `"name"`), so an entry survives a new version with a new path. `set_drawer()` also takes `(key, path, enabled)` tuples, `{"key", "path", "enabled"}` dicts or bare keys.
+- **States** against the library: `ok` (the stored path matches), `outdated` (the library has another path: shown in orange, with "Update to latest" per entry and "Update all") and `missing` (the key isn't in the library: kept, shown greyed out). Duplicate key values in the library are logged; the last loaded wins.
+- **Editing:** "Add to drawer" heads the tile context menu; tiles can be dropped on the drawer; rows reorder by drag, and have an enable checkbox, Remove, Clear and a context menu (Update to latest, Enable, Disable, Show in gallery).
+- **Tile badges:** a filled disc with a tick for enabled entries, a ring for disabled ones, orange when outdated.
+- **What an entry stores:** `drawer_key` is the identity field and `drawer_path` the field kept as its path, so a Megascans batch can use `GalleryBrowser(drawer=True, drawer_key="id", drawer_path="json")`. For full control set `gallery.drawer.entry_factory` to a function `GalleryItem -> DrawerEntry | (key, path, enabled) | None` (None: can't be added).
+- **Running on the drawer:** once an exporter is registered, the drawer shows a run button with the main action's label ("Ingest (12)"). It calls `export_drawer()`, which runs the default exporter, or the one passed in, on the enabled entries in drawer order and skips missing ones.
+- **Preview:** clicking a row shows its library item in the details panel when the panel is open. An outdated entry previews the library's current version.
+- **Removing by drag:** rows dragged out of the drawer onto the gallery are removed.
+- `add_to_drawer(items)`, `drawer_entries()` and `drawer_items(enabled_only=False)` (the library items, in drawer order) round out the API.
+
+Tiles dropped anywhere else on the gallery are swallowed, so a host never receives a drop the user made on the gallery itself.
+
+## 6. Library files and performance
 
 At 18,886 assets:
 
@@ -186,13 +208,13 @@ At 18,886 assets:
 - **Search backend:** SQLite FTS5 when the host's `sqlite3` supports it. Otherwise (Nuke's bundled Python has no FTS5) a pure-Python index with the same queries, results and ranking takes over automatically. At 20k items it takes ~90 ms per query instead of ~10 ms. `ILP_GALLERY_SEARCH=fts5|python` forces one; `library.index.backend` says which is in use.
 - **Live rebuilds:** clients poll the file and reload when it's rebuilt, so rebuilding the cache on a schedule updates open galleries.
 
-## 6. Threading rules
+## 7. Threading rules
 
 - These run on worker threads: `load()`, `poll()`, `thumbnail()`, `rebuild()` and threaded exporters. **Don't touch Qt widgets or host scene APIs in them.**
 - Anything that edits a Houdini, Nuke or Maya scene: register it with `threaded=False`.
 - The library is thread-safe for the gallery's own use: workers prepare items, and the GUI thread applies them.
 
-## 7. Look
+## 8. Look
 
 By default the gallery matches the application it runs in. Inside Houdini it reads Houdini's colour scheme (`hou.qt.getColor`: background, text, buttons), since Houdini's Qt palette doesn't follow schemes like Houdini Light. In Nuke and Maya it derives the colours from the host's Qt palette. Either way it keeps the host's font size, and it follows the host when its colours change: on a palette change, and whenever the panel is shown. Standalone, it uses the built-in ILP look.
 

@@ -7,12 +7,17 @@
     w.register_drag_handler(lambda items: [i.path for i in items])
     w.add_action("Open in RV", lambda items: ...)          # extra context-menu entries
 
+With ``drawer=True`` a drawer pane on the right collects chosen items (see
+``ilp_gallery.ui.drawer``): ``drawerChanged`` reports edits, ``set_drawer()``
+loads a list, and tiles in the drawer get a badge.
+
 For the full app window (menu, export log, rescan, settings) use
 ``ilp_gallery.ui.browser.GalleryBrowser``. No DCC imports here.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -31,11 +36,12 @@ from PySide6.QtWidgets import (
 from ..core.item import GalleryItem
 from ..core.library import GalleryLibrary
 from ..core.source import DataSource, source_for_path
-from .actions import CommandExporter, DragHandler, Exporter, build_mime
+from .actions import MIME_ITEMS, CommandExporter, DragHandler, Exporter, build_mime
 from ..media.thumbs import ThumbnailCache
 from . import theme as theme_mod
 from .delegate import TileDelegate
 from .details import DetailPanel
+from .drawer import MIME_DRAWER, DrawerEntry, DrawerWidget, build_key_index, entry_state
 from .model import GalleryModel, ItemRole
 from .search import SearchField, quote_value
 from .tasks import BUILTIN_FIELDS, TaskThread, format_command, template_keys
@@ -124,17 +130,22 @@ class GalleryWidget(QWidget):
     taskFinished = Signal(bool)           # ok
     sourceLoaded = Signal(object, int)    # DataSource, item count
     sourceFailed = Signal(object, str)    # DataSource, error
+    drawerChanged = Signal(list)          # list[DrawerEntry], after an edit in the drawer UI
     _libraryChanged = Signal()            # thread-safe hop for library listeners
 
     def __init__(self, library: GalleryLibrary | None = None, cache: ThumbnailCache | None = None,
                  parent: QWidget | None = None, show_sidebar: bool = True,
                  show_details: bool = True, tile_aspect: float | None = None,
                  styled: bool = True, theme: "theme_mod.Theme | str | None" = None,
-                 style: str | None = None, **_ignored) -> None:
+                 style: str | None = None, drawer: bool = False, drawer_key: str = "name",
+                 drawer_title: str = "Drawer", drawer_path: str = "path", **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
         standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
         "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
-        ``style``: "sgi" or "fusion" to draw an SGI palette in that widget style."""
+        ``style``: "sgi" or "fusion" to draw an SGI palette in that widget style.
+        ``drawer``: show the drawer pane; ``drawer_key`` is the record field that
+        identifies its entries ("name" survives new versions, "id" or "path" don't
+        have to) and ``drawer_path`` the field stored as each entry's path."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -199,17 +210,22 @@ class GalleryWidget(QWidget):
         self.view.set_tile_width(self.size_slider.value())
         self.details = DetailPanel(self.cache)
         self.details.setMinimumWidth(300)
+        self.drawer = DrawerWidget(key=drawer_key, title=drawer_title, path_key=drawer_path)
+        self._drawer_index: dict[str, GalleryItem] = {}
+        self._drawer_dupes: tuple[str, ...] = ()
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        for w in (self.tree, self.view, self.details):
+        for w in (self.tree, self.view, self.details, self.drawer):
             self.splitter.addWidget(w)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
-        self.splitter.setSizes([270, 860, 380])
+        self.splitter.setStretchFactor(3, 0)
+        self.splitter.setSizes([270, 860, 380, 260])
         self.tree.setVisible(show_sidebar)
         self.details.setVisible(show_details)
+        self.drawer.setVisible(drawer)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -236,6 +252,16 @@ class GalleryWidget(QWidget):
         self.details.categoryClicked.connect(self.tree.select_path)
         self.details.tagClicked.connect(lambda t: self.search.toggle_token(f"tag:{quote_value(t)}"))
         self.cache.thumbnailReady.connect(self._on_thumb_ready)
+        self.drawer.resolver = self._drawer_index.get
+        self.drawer.by_id = self.library.get
+        self.drawer.icon_for = self._drawer_icon
+        self.drawer.entriesChanged.connect(self._on_drawer_edited)
+        self.drawer.showRequested.connect(lambda it: self.select(it.id))
+        self.drawer.currentChanged.connect(self._on_drawer_current)
+        self.drawer.runRequested.connect(lambda: self.export_drawer())
+        self.exportLabelChanged.connect(lambda _label: self._update_drawer_run())
+        self.drawer.logMessage.connect(self.logMessage)
+        self.setAcceptDrops(True)   # swallow our own drags (see dragEnterEvent)
         self._libraryChanged.connect(lambda: self._library_dirty.start())
         self.library.add_listener(self._on_library_changed)
         self._poll_timer = QTimer(self, interval=1000)
@@ -285,6 +311,7 @@ class GalleryWidget(QWidget):
         self.delegate.set_theme(self.theme)
         self.tree.set_theme(self.theme)
         self.details.set_theme(self.theme)
+        self.drawer.set_colors(self.theme.c("text"), self.theme.c("muted"))
         self.view.viewport().update()
         self.themeChanged.emit(self.theme)
 
@@ -410,6 +437,7 @@ class GalleryWidget(QWidget):
             self.exportLabelChanged.emit(self.export_label())
         self.set_export_enabled(True)
         self._show_current(self.view.currentIndex(), force=True)
+        self._update_drawer_run()
         return ex
 
     def unregister_exporter(self, exporter: Exporter) -> None:
@@ -417,6 +445,7 @@ class GalleryWidget(QWidget):
             self._exporters.remove(exporter)
         if self._default_exporter is exporter:
             self._default_exporter = self._exporters[0] if self._exporters else None
+        self._update_drawer_run()
 
     def exporters(self, items: list[GalleryItem] | None = None) -> list[Exporter]:
         """Registered exporters (only those accepting all ``items`` when given)."""
@@ -473,6 +502,46 @@ class GalleryWidget(QWidget):
     def unregister_drag_handler(self, handler: DragHandler) -> None:
         if handler in self._drag_handlers:
             self._drag_handlers.remove(handler)
+
+    # ---------------------------------------------------------------- drawer
+    def has_drawer(self) -> bool:
+        return self.drawer.isVisibleTo(self)
+
+    def set_drawer_visible(self, on: bool) -> None:
+        self.drawer.setVisible(on)
+        if on:
+            self._update_drawer_index()
+
+    def set_drawer(self, entries: Iterable) -> None:
+        """Load the drawer: DrawerEntry objects, ``{"key", "path", "enabled"}`` dicts,
+        ``(key, path, enabled)`` tuples or bare keys. Silent: no ``drawerChanged``."""
+        self.drawer.set_entries(entries)
+        self._update_marks()
+
+    def drawer_entries(self) -> list[DrawerEntry]:
+        return self.drawer.entries()
+
+    def add_to_drawer(self, items: list[GalleryItem] | None = None) -> int:
+        """Add ``items`` (default: the selection). Emits ``drawerChanged`` if any were added."""
+        return self.drawer.add_items(items if items is not None else self.selected_items())
+
+    def export_drawer(self, exporter: Exporter | None = None, enabled_only: bool = True) -> bool:
+        """Run ``exporter`` (default: the default one) on the drawer's items, in drawer order.
+        Missing entries are skipped, and so are disabled ones unless ``enabled_only=False``."""
+        items = self.drawer_items(enabled_only=enabled_only)
+        if not items:
+            self.logMessage.emit(f"{self.drawer.title}: nothing to run on.")
+            return False
+        return self.export(items, exporter)
+
+    def drawer_items(self, enabled_only: bool = False) -> list[GalleryItem]:
+        """Library items behind the drawer entries, in drawer order (missing ones skipped)."""
+        out = []
+        for e in self.drawer.entries():
+            it = self._drawer_index.get(e.key)
+            if it is not None and (e.enabled or not enabled_only):
+                out.append(it)
+        return out
 
     # ---------------------------------------------------------------- tasks
     def run_task(self, fn: Callable, status: str, stoppable: bool = True,
@@ -678,7 +747,58 @@ class GalleryWidget(QWidget):
         self.tree.blockSignals(False)
         self._path_filter = self.tree.current_path()
         self.search.set_vocabulary(list(self.library.tags()), list(self.library.categories()))
+        self._update_drawer_index()
         self._run_query(self.search.text())
+
+    def _update_drawer_index(self) -> None:
+        if not self.drawer.isVisibleTo(self):
+            return
+        index, dupes = build_key_index(self.library, self.drawer.key)
+        self._drawer_index.clear()
+        self._drawer_index.update(index)   # in place: the drawer holds index.get
+        if dupes and tuple(dupes) != self._drawer_dupes:
+            shown = ", ".join(dupes[:10]) + (" …" if len(dupes) > 10 else "")
+            self.logMessage.emit(f"Drawer: {len(dupes)} {self.drawer.key} value(s) are used by more "
+                                 f"than one item, the last loaded wins: {shown}")
+        self._drawer_dupes = tuple(dupes)
+        self.drawer.refresh()
+        self._update_marks()
+
+    def _update_marks(self) -> None:
+        """Tile badges: {item id: (enabled, state)} for items in the drawer."""
+        marks = {}
+        for e in self.drawer.entries():
+            it = self._drawer_index.get(e.key)
+            if it is not None:
+                marks[it.id] = (e.enabled, entry_state(e, it, self.drawer.path_key))
+        if marks != self.delegate.marks:
+            self.delegate.marks = marks
+            self.view.viewport().update()
+        self._update_drawer_run()
+
+    def _update_drawer_run(self) -> None:
+        """The drawer's run button: the main action on the drawer, when there is one."""
+        if not hasattr(self, "drawer"):
+            return
+        has = bool(self._exporters or self.command_template)
+        self.drawer.run_btn.setVisible(has)
+        if has:
+            n = len(self.drawer_items(enabled_only=True))
+            self.drawer.run_btn.setText(f"{self.export_label()} ({n})")
+            self.drawer.run_btn.setEnabled(n > 0)
+
+    def _on_drawer_current(self, item: GalleryItem | None) -> None:
+        """A row clicked in the drawer plays in the details panel (when it's open)."""
+        if item is not None and self.details.isVisible():
+            self.details.set_item(item)
+
+    def _on_drawer_edited(self, entries: list) -> None:
+        self._update_marks()
+        self.drawerChanged.emit(entries)
+
+    def _drawer_icon(self, item: GalleryItem):
+        pix = self.cache.poster(item)
+        return QIcon(pix) if pix is not None and not pix.isNull() else None
 
     def _run_query(self, text: str) -> None:
         self._search_ids = self.library.search(text)
@@ -725,6 +845,8 @@ class GalleryWidget(QWidget):
 
     def _on_thumb_ready(self, item_id: str) -> None:
         self.view.refresh_item(self.model.index_of(item_id))
+        if item_id in self.delegate.marks:
+            self.drawer.refresh_icons()
         d = self.details
         if d.item and d.item.id == item_id and d.player.canvas._pix is None:
             d.player._show_first_poster()
@@ -755,6 +877,11 @@ class GalleryWidget(QWidget):
         n = len(items)
         menu = QMenu(self)
         self.theme.polish_menu(menu)
+        if self.has_drawer():
+            title = self.drawer.title.lower()
+            menu.addAction(f"Add to {title} ({n})" if n > 1 else f"Add to {title}",
+                           lambda: self.add_to_drawer(items))
+            menu.addSeparator()
         for ex in self.exporters(items):
             menu.addAction(f"{ex.label} ({n})" if n > 1 else ex.label,
                            lambda ex=ex: self.export(items, ex))
@@ -791,6 +918,53 @@ class GalleryWidget(QWidget):
         for it in items:
             self.cache.invalidate(it.id)
             self.view.refresh_item(self.model.index_of(it.id))
+
+    # Our own tiles dragged and dropped back onto the gallery (anywhere but the
+    # drawer) are swallowed. Otherwise the drop travels up to the host window and
+    # a DCC may try to open the file URL (Houdini: "Save and open" the scene).
+    # Drawer rows dragged out of the drawer onto the gallery are removed from it.
+    def _own_drag(self, event) -> bool:
+        return event.source() is self.view and event.mimeData().hasFormat(MIME_ITEMS)
+
+    def _drawer_drag_out(self, event) -> bool:
+        if event.source() is not self.drawer.list or not event.mimeData().hasFormat(MIME_DRAWER):
+            return False
+        pos = self.drawer.mapFrom(self, event.position().toPoint())
+        return not self.drawer.rect().contains(pos)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._own_drag(event) or event.source() is self.drawer.list:
+            self.dragMoveEvent(event)
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if self._drawer_drag_out(event):
+            event.setDropAction(Qt.CopyAction)   # not Move: the drawer rebuilds its rows itself
+            event.accept()
+        elif self._own_drag(event) or event.source() is self.drawer.list:
+            event.setDropAction(Qt.IgnoreAction)
+            event.accept()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if self._drawer_drag_out(event):
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            try:
+                keys = json.loads(bytes(event.mimeData().data(MIME_DRAWER)).decode("utf-8"))
+            except ValueError:
+                return
+            # After the drag finishes: if Qt also removes the dragged rows (a Move),
+            # the rebuild that follows puts the list back in line with the entries.
+            keys = [str(k) for k in keys]
+            QTimer.singleShot(0, lambda: self.drawer.remove_keys(keys))
+        elif self._own_drag(event) or event.source() is self.drawer.list:
+            event.setDropAction(Qt.IgnoreAction)
+            event.accept()
+        else:
+            super().dropEvent(event)
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self.view.viewport() and event.type() == event.Type.Wheel and event.modifiers() & Qt.ControlModifier:

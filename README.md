@@ -87,7 +87,7 @@ Re-running only re-reads assets whose JSON changed. Pass `--full` to rescan ever
 
 Words match by prefix and the search runs as you type (FTS5 with bm25 ranking; the name counts most, then tags, then categories, then everything else). If the host's `sqlite3` has no FTS5, as in Nuke's bundled Python, a pure-Python index with the same query language and ranking is used instead. `ILP_GALLERY_SEARCH=fts5|python` forces one.
 
-Themes: by default the gallery matches the host (Houdini, Nuke, Maya) or uses the ILP look standalone. `theme="sgi"` / `"sgi-dark"` / `"sgi-slate"` give a modern IRIX look, and `"fusion"` / `"fusion-dark"` / `"fusion-slate"` the same palettes in Qt's Fusion style; see `docs/API.md`, section 7. Accents are ignored, so `cafe` finds `Café`.
+Themes: by default the gallery matches the host (Houdini, Nuke, Maya) or uses the ILP look standalone. `theme="sgi"` / `"sgi-dark"` / `"sgi-slate"` give a modern IRIX look, and `"fusion"` / `"fusion-dark"` / `"fusion-slate"` the same palettes in Qt's Fusion style; see `docs/API.md`, section 8. Accents are ignored, so `cafe` finds `Café`.
 
 | Query | Meaning |
 |---|---|

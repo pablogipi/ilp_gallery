@@ -268,7 +268,8 @@ def test_drag_handlers(app, gallery):
         return m
     gallery.register_drag_handler(only, replace_default=True)
     md = gallery.model.mimeData(idx)
-    assert not md.hasFormat("application/x-ilp-gallery-items")
+    assert md.text() == "replaced"
+    assert md.hasFormat("application/x-ilp-gallery-items")  # records always kept (drawer)
 
     gallery.register_drag_handler(lambda items: 1 / 0)    # broken handler: drag still works
     assert gallery.model.mimeData(idx) is not None

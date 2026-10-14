@@ -39,7 +39,8 @@ A handler gets the dragged items and returns any of:
 * ``None``: nothing to add
 
 Results of all handlers are merged on top of the default (file URLs of
-``item.path`` + the JSON records); ``replace_default=True`` drops the default.
+``item.path`` + the JSON records); ``replace_default=True`` drops the default
+file URLs and text. The JSON records are always kept: the drawer reads them.
 """
 
 from __future__ import annotations
@@ -50,7 +51,6 @@ import shlex
 import subprocess
 import traceback
 from dataclasses import dataclass, field
-from pprint import pprint
 from typing import Any, Callable, Iterable
 
 from PySide6.QtCore import QMimeData, QUrl
@@ -225,4 +225,6 @@ def build_mime(items: list[GalleryItem], handlers: Iterable[DragHandler], log=No
         except Exception as exc:  # a broken handler must not kill the drag
             if log:
                 log(f"Drag handler {getattr(h.fn, '__name__', h.fn)} failed: {exc}")
+    if not md.hasFormat(MIME_ITEMS):  # always kept: the drawer (and other galleries) read it
+        md.setData(MIME_ITEMS, json.dumps([it.to_dict() for it in items]).encode())
     return md
