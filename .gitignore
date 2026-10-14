@@ -1,2 +1,4 @@
 src/megascans.json
 *.patch
+session.vim
+lock
