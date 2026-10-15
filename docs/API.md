@@ -182,7 +182,7 @@ g.set_drawer(load())                                         # silent: no drawer
 - **Entries** are `DrawerEntry(key, path, enabled)`. `key` is the value of the `drawer_key` field (default `"name"`), so an entry survives a new version with a new path. `set_drawer()` also takes `(key, path, enabled)` tuples, `{"key", "path", "enabled"}` dicts or bare keys.
 - **States** against the library: `ok` (the stored path matches), `outdated` (the library has another path: shown in orange, with "Update to latest" per entry and "Update all") and `missing` (the key isn't in the library: kept, shown greyed out). Duplicate key values in the library are logged; the last loaded wins.
 - **Editing:** "Add to drawer" heads the tile context menu; tiles can be dropped on the drawer; rows reorder by drag, and have an enable checkbox, Remove, Clear and a context menu (Update to latest, Enable, Disable, Show in gallery).
-- **Tile badges:** a filled disc with a tick for enabled entries, a ring for disabled ones, orange when outdated.
+- **Tile badges:** a filled disc with a tick for enabled entries and a ring for disabled ones; green when the path is current, orange when it's outdated (`MARK_OK` / `MARK_OUTDATED` in `ui/delegate.py`).
 - **What an entry stores:** `drawer_key` is the identity field and `drawer_path` the field kept as its path, so a Megascans batch can use `GalleryBrowser(drawer=True, drawer_key="id", drawer_path="json")`. For full control set `gallery.drawer.entry_factory` to a function `GalleryItem -> DrawerEntry | (key, path, enabled) | None` (None: can't be added).
 - **Running on the drawer:** once an exporter is registered, the drawer shows a run button with the main action's label ("Ingest (12)"). It calls `export_drawer()`, which runs the default exporter, or the one passed in, on the enabled entries in drawer order and skips missing ones.
 - **Preview:** clicking a row shows its library item in the details panel when the panel is open. An outdated entry previews the library's current version.
@@ -276,3 +276,20 @@ browser.set_theme("sgi-slate", style="fusion")     # live
 ```
 
 `style=` accepts `"sgi"` or `"fusion"` with any of the SGI palettes, including tweaked ones (`SGI.replace(...)`). Fusion is applied to the gallery's own widgets only, like the SGI style, and switching looks live removes whatever the previous one installed.
+
+## 9. Panes and top bar
+
+The layout is: categories | tiles | a right column where the drawer (top) and the details panel (bottom) share the height, so the tiles keep the middle.
+
+Every pane collapses. Its title sits in a tab with a small arrow: the arrow (or a double-click on the tab) collapses the pane, and its tab moves to a narrow strip on that side of the gallery. Collapsed panes on the same side stack their tabs in one strip, top to bottom, like Maya's side panels; the categories and tiles fold to the left, the drawer and details to the right. Clicking a tab expands the pane at its previous size, and holding a drag over a tab opens it, so tiles can still be dropped on a folded drawer.
+
+```python
+g = GalleryWidget(drawer=True, collapsed=("details",), tile_size=90, size_control="wheel")
+g.set_collapsed("drawer", True)
+g.is_collapsed("drawer")            # True; the drawer still works (has_drawer() stays True)
+g.add_toolbar_widget(QLabel(node.path()))   # beside the size control
+```
+
+- **Pane names:** `"tree"`, `"grid"`, `"details"`, `"drawer"`; the panes are in `g.panes`, the layout in `g.area`. When one pane of the right column collapses the other takes its height; when both do, the column's width goes to the tiles. A collapsed details panel stops the player and isn't updated until it opens again. The drawer's tab shows its count ("Clips: 4"). `show_sidebar` / `show_details` / `drawer` remove a pane completely (no tab).
+- **Tile size:** `tile_size` sets the starting width (90 to 420; 90 is the most compact). `size_control="wheel"` swaps the slider for the SGI thumbwheel (drag it like ivview's Dolly wheel); it takes its colours from any theme.
+- **Top bar:** `add_toolbar_widget(widget, side="left")` places a widget beside the size control, `side="right"` right-aligns it (before any buttons). `add_toolbar_label(text, side="right", framed=True)` adds a selectable label with a border in the theme's colours, e.g. a host node's path. `add_toolbar_button()` still adds buttons on the right.

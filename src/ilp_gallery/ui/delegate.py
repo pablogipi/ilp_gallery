@@ -12,7 +12,8 @@ from . import theme
 from .model import ItemRole
 
 BADGE = {MEDIA_MOVIE: "MOV", MEDIA_GIF: "GIF"}
-OUTDATED = QColor("#e0a030")      # matches the drawer's outdated colour
+MARK_OK = QColor("#3fae5a")       # drawer badge: in the drawer, path up to date
+MARK_OUTDATED = QColor("#e0a030")  # the library has another path (matches the drawer text)
 TYPE_NAMES = {"image": "Image", "gif": "GIF", "movie": "Movie"}
 
 
@@ -183,10 +184,11 @@ class TileDelegate(QStyledItemDelegate):
 
     def _paint_mark(self, p: QPainter, img_rect: QRect, enabled: bool, state: str) -> None:
         """Drawer badge, top right: a filled disc with a tick when enabled, a ring when
-        disabled; orange instead of the accent when the drawer's path is outdated."""
+        disabled; green when the drawer's path is current, orange when it's outdated.
+        Fixed colours, not the theme accent: hosts like Houdini have an orange accent."""
         d = max(12, min(20, img_rect.height() // 6))
         r = QRectF(img_rect.right() - d - 5, img_rect.top() + 5, d, d)
-        color = OUTDATED if state == "outdated" else self._accent
+        color = MARK_OUTDATED if state == "outdated" else MARK_OK
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(QPen(QColor(0, 0, 0, 150), 1.0))

@@ -171,6 +171,7 @@ class DrawerWidget(QWidget):
     showRequested = Signal(object)       # GalleryItem: "Show in gallery"
     currentChanged = Signal(object)      # GalleryItem | None: the row clicked in the drawer
     runRequested = Signal()              # the run button (e.g. "Ingest drawer")
+    titleChanged = Signal(str)           # "Clips: 4  (3 enabled)", e.g. for a pane title
     logMessage = Signal(str)
 
     def __init__(self, key: str = "name", title: str = "Drawer", path_key: str = "path",
@@ -403,7 +404,9 @@ class DrawerWidget(QWidget):
         self.list.blockSignals(False)
 
         n = len(self._entries)
-        self.header.setText(f"{self.title}: {n}" + (f"  ({enabled} enabled)" if enabled != n else ""))
+        title = f"{self.title}: {n}" + (f"  ({enabled} enabled)" if enabled != n else "")
+        self.header.setText(title)
+        self.titleChanged.emit(title)
         status = [f"{outdated} outdated"] * bool(outdated) + [f"{missing} missing"] * bool(missing)
         self.status.setText("  ·  ".join(status))
         self.status.setVisible(bool(status))

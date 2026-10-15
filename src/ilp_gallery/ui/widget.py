@@ -7,6 +7,10 @@
     w.register_drag_handler(lambda items: [i.path for i in items])
     w.add_action("Open in RV", lambda items: ...)          # extra context-menu entries
 
+The four panes (categories tree, tiles, details, drawer) collapse to a narrow
+vertical tab, Maya style: ``collapsed=("tree", "details")`` builds them
+collapsed, ``set_collapsed("drawer", True)`` collapses one later.
+
 With ``drawer=True`` a drawer pane on the right collects chosen items (see
 ``ilp_gallery.ui.drawer``): ``drawerChanged`` reports edits, ``set_drawer()``
 loads a list, and tiles in the drawer get a badge.
@@ -40,6 +44,7 @@ from .actions import MIME_ITEMS, CommandExporter, DragHandler, Exporter, build_m
 from ..media.thumbs import ThumbnailCache
 from . import theme as theme_mod
 from .delegate import TileDelegate
+from .collapsible import CollapsiblePane, PaneArea
 from .details import DetailPanel
 from .drawer import MIME_DRAWER, DrawerEntry, DrawerWidget, build_key_index, entry_state
 from .model import GalleryModel, ItemRole
@@ -133,19 +138,26 @@ class GalleryWidget(QWidget):
     drawerChanged = Signal(list)          # list[DrawerEntry], after an edit in the drawer UI
     _libraryChanged = Signal()            # thread-safe hop for library listeners
 
+    TILE_MIN, TILE_MAX = 90, 420           # tile width range of the size control
+
     def __init__(self, library: GalleryLibrary | None = None, cache: ThumbnailCache | None = None,
                  parent: QWidget | None = None, show_sidebar: bool = True,
                  show_details: bool = True, tile_aspect: float | None = None,
                  styled: bool = True, theme: "theme_mod.Theme | str | None" = None,
                  style: str | None = None, drawer: bool = False, drawer_key: str = "name",
-                 drawer_title: str = "Drawer", drawer_path: str = "path", **_ignored) -> None:
+                 drawer_title: str = "Drawer", drawer_path: str = "path",
+                 collapsed: Iterable[str] = (), tile_size: int = 170,
+                 size_control: str = "slider", **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
         standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
         "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
         ``style``: "sgi" or "fusion" to draw an SGI palette in that widget style.
         ``drawer``: show the drawer pane; ``drawer_key`` is the record field that
         identifies its entries ("name" survives new versions, "id" or "path" don't
-        have to) and ``drawer_path`` the field stored as each entry's path."""
+        have to) and ``drawer_path`` the field stored as each entry's path.
+        ``collapsed``: panes to build collapsed, any of "tree", "grid", "details", "drawer".
+        ``tile_size``: starting tile width (90 to 420; 90 is the most compact).
+        ``size_control``: "slider" or "wheel" (an SGI thumbwheel, like ivview's Dolly)."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -179,17 +191,31 @@ class GalleryWidget(QWidget):
         self.search = SearchField()
         self.search.setPlaceholderText("Search names, tags, IDs…    tag:rock  cat:cliff  meta:tileable  -moss")
         self.search.setMaximumWidth(560)
-        self.size_slider = QSlider(Qt.Horizontal, minimum=90, maximum=420, value=170)
+        if size_control == "wheel":
+            from .sgi.thumbwheel import ThumbWheel
+            self.size_slider = ThumbWheel(Qt.Horizontal, self.theme)
+        elif size_control == "slider":
+            self.size_slider = QSlider(Qt.Horizontal)
+        else:
+            raise ValueError(f"size_control must be 'slider' or 'wheel', not {size_control!r}")
+        self.size_slider.setRange(self.TILE_MIN, self.TILE_MAX)
+        self.size_slider.setSingleStep(10)
+        self.size_slider.setValue(max(self.TILE_MIN, min(self.TILE_MAX, int(tile_size))))
         self.size_slider.setFixedWidth(140)
         self.size_slider.setToolTip("Tile size (Ctrl + wheel)")
-        self.toolbar = QHBoxLayout()
-        self.toolbar.setSpacing(2)
+        self.toolbar_left = QHBoxLayout()               # add_toolbar_widget(): beside the size control
+        self.toolbar_left.setSpacing(6)
+        self.toolbar = QHBoxLayout()                    # add_toolbar_button(): right-hand side
+        self.toolbar.setSpacing(6)
+        self._right_widgets = 0                         # add_toolbar_widget(side="right") count
+        self._framed_labels: list[QLabel] = []
         top = QHBoxLayout()
         top.setContentsMargins(8, 6, 8, 6)
         top.setSpacing(10)
         top.addWidget(self.search, 3)
         top.addWidget(QLabel("Size"))
         top.addWidget(self.size_slider)
+        top.addLayout(self.toolbar_left)
         top.addStretch(1)
         top.addLayout(self.toolbar)
 
@@ -214,24 +240,34 @@ class GalleryWidget(QWidget):
         self._drawer_index: dict[str, GalleryItem] = {}
         self._drawer_dupes: tuple[str, ...] = ()
 
-        self.splitter = QSplitter(Qt.Horizontal)
-        self.splitter.setChildrenCollapsible(False)
-        for w in (self.tree, self.view, self.details, self.drawer):
-            self.splitter.addWidget(w)
-        self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setStretchFactor(2, 0)
-        self.splitter.setStretchFactor(3, 0)
-        self.splitter.setSizes([270, 860, 380, 260])
-        self.tree.setVisible(show_sidebar)
-        self.details.setVisible(show_details)
-        self.drawer.setVisible(drawer)
+        # Panes: categories | tiles | right column (drawer above details). Each one
+        # collapses to a tab in the strip on its side (see ui/collapsible.py).
+        self.drawer.header.hide()                       # its text is the pane title instead
+        self.area = PaneArea()
+        self.panes: dict[str, CollapsiblePane] = {}
+        for name, content, title, edge, where, size, stretch in (
+                ("tree", self.tree, "Categories", "left", "left", 270, 0),
+                ("grid", self.view, "Assets", "left", "center", 860, 1),
+                ("drawer", self.drawer, drawer_title, "right", "right", 260, 1),
+                ("details", self.details, "Preview", "right", "right", 340, 1)):
+            self.panes[name] = self.area.add_pane(name, CollapsiblePane(content, title, edge),
+                                                  where, size, stretch)
+        self.area.set_sizes({"tree": 270, "grid": 860}, column_width=360)
+        self.splitter = self.area.splitter
+        self.drawer.titleChanged.connect(self.panes["drawer"].set_title)
+        self.panes["drawer"].set_title(self.drawer.header.text())
+        self.panes["details"].collapsedChanged.connect(self._on_details_collapsed)
+        self.area.set_enabled("tree", show_sidebar)
+        self.area.set_enabled("details", show_details)
+        self.area.set_enabled("drawer", drawer)
+        for name in collapsed:
+            self.set_collapsed(name, True)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addLayout(top)
-        lay.addWidget(self.splitter, 1)
+        lay.addWidget(self.area, 1)
 
         # -- wiring ------------------------------------------------------
         self.search.queryChanged.connect(self._run_query)
@@ -312,6 +348,11 @@ class GalleryWidget(QWidget):
         self.tree.set_theme(self.theme)
         self.details.set_theme(self.theme)
         self.drawer.set_colors(self.theme.c("text"), self.theme.c("muted"))
+        self.area.set_theme(self.theme)
+        for label in self._framed_labels:
+            self._style_framed(label)
+        if hasattr(self.size_slider, "set_theme"):          # the thumbwheel
+            self.size_slider.set_theme(self.theme)
         self.view.viewport().update()
         self.themeChanged.emit(self.theme)
 
@@ -505,12 +546,23 @@ class GalleryWidget(QWidget):
 
     # ---------------------------------------------------------------- drawer
     def has_drawer(self) -> bool:
-        return self.drawer.isVisibleTo(self)
+        """True when the drawer is part of the gallery, collapsed or not."""
+        return self.panes["drawer"].is_enabled()
 
     def set_drawer_visible(self, on: bool) -> None:
-        self.drawer.setVisible(on)
+        self.area.set_enabled("drawer", on)
         if on:
             self._update_drawer_index()
+
+    # ---------------------------------------------------------------- panes
+    def set_collapsed(self, pane: str, collapsed: bool = True) -> None:
+        """Collapse ("tree", "grid", "details", "drawer") to a vertical tab, or expand it."""
+        if pane not in self.panes:
+            raise ValueError(f"unknown pane {pane!r}: use one of {', '.join(self.panes)}")
+        self.area.set_collapsed(pane, collapsed)
+
+    def is_collapsed(self, pane: str) -> bool:
+        return self.panes[pane].is_collapsed()
 
     def set_drawer(self, entries: Iterable) -> None:
         """Load the drawer: DrawerEntry objects, ``{"key", "path", "enabled"}`` dicts,
@@ -605,6 +657,34 @@ class GalleryWidget(QWidget):
         if default:
             self._default_action = callback
 
+    def add_toolbar_widget(self, widget: QWidget, stretch: int = 0, side: str = "left") -> QWidget:
+        """Put ``widget`` in the top bar: ``side="left"`` beside the tile size control,
+        ``"right"`` right-aligned (before any toolbar buttons)."""
+        if side == "left":
+            self.toolbar_left.addWidget(widget, stretch)
+        elif side == "right":
+            self.toolbar.insertWidget(self._right_widgets, widget, stretch)
+            self._right_widgets += 1
+        else:
+            raise ValueError(f"side must be 'left' or 'right', not {side!r}")
+        return widget
+
+    def add_toolbar_label(self, text: str = "", side: str = "right", framed: bool = True) -> QLabel:
+        """A label in the top bar, e.g. the host node's path. ``framed`` draws a border
+        around it in the theme's colours so it stands out from the controls."""
+        label = QLabel(text)
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)    # the path can be copied
+        if framed:
+            self._framed_labels.append(label)
+            self._style_framed(label)
+        return self.add_toolbar_widget(label, side=side)
+
+    def _style_framed(self, label: QLabel) -> None:
+        t = self.theme
+        label.setStyleSheet(f"QLabel {{ color: {t.c('text').name()}; background: {t.c('tile').name()};"
+                            f" border: 1px solid {t.c('border').name()}; border-radius: 3px;"
+                            f" padding: 2px 8px; }}")
+
     def add_toolbar_button(self, text: str, callback: Callable[[], None], tooltip: str = "") -> QPushButton:
         b = QPushButton(text, objectName="flat")
         b.setToolTip(tooltip)
@@ -697,14 +777,25 @@ class GalleryWidget(QWidget):
         self.details.set_export_enabled(on)
 
     def set_sidebar_visible(self, on: bool) -> None:
-        self.tree.setVisible(on)
+        """Show or remove the categories pane (``set_collapsed`` folds it instead)."""
+        self.area.set_enabled("tree", on)
+        if on:
+            self.area.set_collapsed("tree", False)
 
     def set_details_visible(self, on: bool) -> None:
-        self.details.setVisible(on)
+        """Show or remove the details pane (``set_collapsed`` folds it instead)."""
+        self.area.set_enabled("details", on)
         if on:
-            self._show_current(self.view.currentIndex())
+            self.area.set_collapsed("details", False)
+            self._show_current(self.view.currentIndex(), force=True)
         else:
             self.details.player.stop()
+
+    def _on_details_collapsed(self, collapsed: bool) -> None:
+        if collapsed:
+            self.details.player.stop()
+        else:
+            self._show_current(self.view.currentIndex(), force=True)
 
     def set_tile_width(self, width: int) -> None:
         self.size_slider.setValue(width)
@@ -751,7 +842,7 @@ class GalleryWidget(QWidget):
         self._run_query(self.search.text())
 
     def _update_drawer_index(self) -> None:
-        if not self.drawer.isVisibleTo(self):
+        if not self.has_drawer():
             return
         index, dupes = build_key_index(self.library, self.drawer.key)
         self._drawer_index.clear()
