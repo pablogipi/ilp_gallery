@@ -21,6 +21,7 @@ For the full app window (menu, export log, rescan, settings) use
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import logging
 import os
@@ -31,10 +32,10 @@ from typing import Callable, Iterable
 
 import time
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, QObject, QRunnable, QThreadPool, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, QObject, QRect, QRunnable, QThreadPool, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMenu, QPushButton, QSlider, QSplitter, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMenu, QPushButton, QSlider, QSplitter, QStyle, QVBoxLayout, QWidget,
 )
 
 from ..core.item import GalleryItem
@@ -46,6 +47,7 @@ from . import theme as theme_mod
 from .delegate import TileDelegate
 from .collapsible import CollapsiblePane, PaneArea
 from .details import DetailPanel
+from .names import format_name
 from .drawer import MIME_DRAWER, DrawerEntry, DrawerWidget, build_key_index, entry_state
 from .model import GalleryModel, ItemRole
 from .search import SearchField, quote_value
@@ -136,6 +138,7 @@ class GalleryWidget(QWidget):
     sourceLoaded = Signal(object, int)    # DataSource, item count
     sourceFailed = Signal(object, str)    # DataSource, error
     drawerChanged = Signal(list)          # list[DrawerEntry], after an edit in the drawer UI
+    uiStateChanged = Signal(dict)         # see ui_state(); debounced, only real changes
     _libraryChanged = Signal()            # thread-safe hop for library listeners
 
     TILE_MIN, TILE_MAX = 90, 420           # tile width range of the size control
@@ -148,7 +151,11 @@ class GalleryWidget(QWidget):
                  drawer_title: str = "Drawer", drawer_path: str = "path",
                  collapsed: Iterable[str] = (), tile_size: int = 170,
                  size_control: str = "slider", size_label: bool = True,
-                 media_badges: bool = True, **_ignored) -> None:
+                 media_badges: bool = True, ui_state: "dict | str | None" = None,
+                 name_format: "Callable[[str], object] | None" = None,
+                 subtitles: str = "always", show_paths: bool = True,
+                 grid_title: str | None = None, drawer_category: str | None = "Assigned",
+                 **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
         standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
         "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
@@ -160,7 +167,18 @@ class GalleryWidget(QWidget):
         ``tile_size``: starting tile width (90 to 420; 90 is the most compact).
         ``size_control``: "slider" or "wheel" (an SGI thumbwheel, like ivview's Dolly);
         ``size_label=False`` drops the "Size" label in front of it.
-        ``media_badges=False`` hides the MOV / GIF labels on the tiles."""
+        ``media_badges=False`` hides the MOV / GIF labels on the tiles.
+        ``ui_state``: a dict or JSON string from :meth:`ui_state` to start from.
+        ``name_format``: how names are shown on tiles and in the drawer (title, second
+        line, category chip), see :mod:`ilp_gallery.ui.names`.
+        ``subtitles``: the tiles' second line "always", "never", or "when_needed":
+        only on tiles whose title another item shares (e.g. variants of one move).
+        ``show_paths=False`` keeps file paths out of the UI (tooltips, the details
+        panel's Location and "Open folder"), e.g. when a publishing system owns them.
+        ``grid_title``: the tiles pane's tab; default: the data source's ``label`` when
+        there's one source, else "Assets".
+        ``drawer_category``: label of a pinned category listing the drawer's items
+        ("Assigned"); None: no such category."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -247,6 +265,11 @@ class GalleryWidget(QWidget):
         self.delegate = TileDelegate(self.cache, self)
         self.delegate.placeholder = default_placeholder()
         self.delegate.media_badges = media_badges
+        self._name_format = name_format
+        if subtitles not in ("always", "when_needed", "never"):
+            raise ValueError(f"subtitles must be 'always', 'when_needed' or 'never', not {subtitles!r}")
+        self.delegate.subtitles = subtitles
+        self.model.show_paths = show_paths
         self.view = GalleryView(self.delegate)
         self.view.setStyleSheet("")
         self.view.setModel(self.model)
@@ -257,6 +280,7 @@ class GalleryWidget(QWidget):
         self.details = DetailPanel(self.cache)
         self.details.setMinimumWidth(300)
         self.drawer = DrawerWidget(key=drawer_key, title=drawer_title, path_key=drawer_path)
+        self.details.show_paths = self.drawer.show_paths = show_paths
         self._drawer_index: dict[str, GalleryItem] = {}
         self._drawer_dupes: tuple[str, ...] = ()
 
@@ -273,7 +297,10 @@ class GalleryWidget(QWidget):
             self.panes[name] = self.area.add_pane(name, CollapsiblePane(content, title, edge),
                                                   where, size, stretch)
         self.area.set_sizes({"tree": 270, "grid": 860}, column_width=360)
+        self._grid_title = grid_title
+        self._drawer_category = drawer_category
         self.splitter = self.area.splitter
+        self.set_name_format(self._name_format)
         self.drawer.titleChanged.connect(self.panes["drawer"].set_title)
         self.panes["drawer"].set_title(self.drawer.header.text())
         self.panes["details"].collapsedChanged.connect(self._on_details_collapsed)
@@ -311,6 +338,7 @@ class GalleryWidget(QWidget):
         self.cache.thumbnailReady.connect(self._on_thumb_ready)
         self.drawer.resolver = self._drawer_index.get
         self.drawer.by_id = self.library.get
+        self._drawer_placeholder_icon = None
         self.drawer.icon_for = self._drawer_icon
         self.drawer.entriesChanged.connect(self._on_drawer_edited)
         self.drawer.showRequested.connect(lambda it: self.select(it.id))
@@ -333,6 +361,24 @@ class GalleryWidget(QWidget):
         self._refresh_from_library()
         self._apply_theme(self.theme)
         self._palette_watcher = _AppPaletteWatcher(self.refresh_theme, self)
+
+        # UI state: report user changes (debounced), restore from ui_state.
+        self._pending_category: tuple | None = None
+        self._state_quiet = False
+        self._sizes_moved = False             # a splitter was dragged since the last report
+        self._state_timer = QTimer(self, singleShot=True, interval=400)
+        self._state_timer.timeout.connect(self._emit_ui_state)
+        changed = self._state_timer.start
+        self.search.queryChanged.connect(lambda _t: changed())
+        self.tree.pathSelected.connect(self._on_user_category)
+        self.size_slider.valueChanged.connect(lambda _v: changed())
+        self.area.splitter.splitterMoved.connect(self._on_splitter_moved)
+        self.area.column.splitterMoved.connect(self._on_splitter_moved)
+        for pane in self.panes.values():
+            pane.collapsedChanged.connect(lambda _c: changed())
+        if ui_state:
+            self.set_ui_state(ui_state)
+        self._last_state = self.ui_state()
 
     # -- public API ------------------------------------------------------
     # ---------------------------------------------------------------- look
@@ -368,8 +414,11 @@ class GalleryWidget(QWidget):
         self.delegate.set_theme(self.theme)
         self.tree.set_theme(self.theme)
         self.details.set_theme(self.theme)
-        self.drawer.set_colors(self.theme.c("text"), self.theme.c("muted"))
+        self.drawer.set_colors(self.theme.c("text"), self.theme.c("muted"), self.theme.c("accent"))
         self.area.set_theme(self.theme)
+        self._drawer_placeholder_icon = None              # rebuilt in the new colours
+        if hasattr(self, "drawer"):
+            self.drawer.refresh_icons()
         for label in self._framed_labels:
             self._style_framed(label)
         if hasattr(self.size_slider, "set_theme"):          # the thumbwheel
@@ -386,7 +435,21 @@ class GalleryWidget(QWidget):
         """Add a data source. With ``background`` the (possibly slow) load runs off the GUI thread;
         ``sourceLoaded`` / ``sourceFailed`` report the outcome."""
         self.library.register_source(source)
+        self._update_grid_title()
         self._reload(source, background)
+
+    def set_grid_title(self, title: str | None) -> None:
+        """The tiles pane's tab text; None: from the data sources (see ``grid_title``)."""
+        self._grid_title = title
+        self._update_grid_title()
+
+    def _update_grid_title(self) -> None:
+        if self._grid_title:
+            title = self._grid_title
+        else:
+            labels = [s.label or s.name for s in self.library.sources]
+            title = labels[0] if len(labels) == 1 else "Assets"
+        self.panes["grid"].set_title(title)
 
     def reload(self, background: bool = True) -> None:
         for src in self.library.sources:
@@ -408,6 +471,7 @@ class GalleryWidget(QWidget):
         src = source_for_path(path, recursive=recursive)
         src = self.library.source(src.name) or src
         self.library.register_source(src)
+        self._update_grid_title()
         if background:
             self._reload(src, True)
             return 0
@@ -574,6 +638,8 @@ class GalleryWidget(QWidget):
         self.area.set_enabled("drawer", on)
         if on:
             self._update_drawer_index()
+        else:
+            self.tree.remove_special(self.DRAWER_PATH)
 
     # ---------------------------------------------------------------- panes
     def set_collapsed(self, pane: str, collapsed: bool = True) -> None:
@@ -655,13 +721,14 @@ class GalleryWidget(QWidget):
 
     def selected_items(self) -> list[GalleryItem]:
         rows = sorted(self.view.selectionModel().selectedIndexes(), key=lambda i: i.row())
-        return [i.data(ItemRole) for i in rows]
+        items = (i.data(ItemRole) for i in rows)
+        return [it for it in items if it is not None]      # rows of items just removed: None
 
     def current_item(self) -> GalleryItem | None:
         return self.details.item
 
     def visible_items(self) -> list[GalleryItem]:
-        return [self.library.get(i) for i in self.model.ids()]
+        return [it for it in (self.library.get(i) for i in self.model.ids()) if it is not None]
 
     def select(self, item_id: str) -> None:
         idx = self.model.index_of(item_id)
@@ -701,6 +768,36 @@ class GalleryWidget(QWidget):
             raise ValueError(f"side must be 'left' or 'right', not {side!r}")
         return widget
 
+    def set_name_format(self, fmt) -> None:
+        """How names are shown on tiles and in the drawer; None: the plain name."""
+        self._name_format = fmt
+        self.delegate.name_format = self.model.name_format = self.details.name_format = fmt
+        self.drawer.set_name_format(fmt)
+        self._update_shared_titles()
+        if self.details.item is not None:
+            self.details.set_item(self.details.item)
+
+    def set_subtitles(self, mode: str) -> None:
+        """The tiles' second line: "always", "never" or "when_needed"."""
+        if mode not in ("always", "when_needed", "never"):
+            raise ValueError(f"subtitles must be 'always', 'when_needed' or 'never', not {mode!r}")
+        self.delegate.subtitles = mode
+        self._update_shared_titles()
+
+    def _update_shared_titles(self) -> None:
+        """Titles used by more than one item in the library (for "when_needed")."""
+        if self.delegate.subtitles == "when_needed":
+            counts = Counter(format_name(self._name_format, it).title for it in self.library)
+            self.delegate.shared_titles = {t for t, n in counts.items() if n > 1}
+        else:
+            self.delegate.shared_titles = set()
+        self.view.viewport().update()
+
+    def set_drawer_current(self, key: str | None) -> None:
+        """Mark the drawer entry ``key`` as current (bold, tinted), e.g. a host node's
+        current clip; None clears it."""
+        self.drawer.set_current_key(key)
+
     def add_drawer_action(self, label: str, callback: Callable[[list[DrawerEntry]], None],
                           single: bool = False) -> None:
         """An entry at the top of the drawer rows' context menu; see DrawerWidget.add_action."""
@@ -722,8 +819,20 @@ class GalleryWidget(QWidget):
                             f" border: 1px solid {t.c('border').name()}; border-radius: 3px;"
                             f" padding: 2px 8px; }}")
 
-    def add_toolbar_button(self, text: str, callback: Callable[[], None], tooltip: str = "") -> QPushButton:
+    def add_toolbar_button(self, text: str, callback: Callable[[], None], tooltip: str = "",
+                           icon: "QIcon | str | None" = None) -> QPushButton:
+        """A flat button on the right of the top bar. ``icon``: a QIcon, or "reload" for
+        the platform's refresh icon; with an icon, ``text`` can be "" (icon only)."""
         b = QPushButton(text, objectName="flat")
+        if isinstance(icon, str):
+            names = {"reload": QStyle.SP_BrowserReload, "refresh": QStyle.SP_BrowserReload}
+            if icon not in names:
+                raise ValueError(f"unknown icon name {icon!r}: use a QIcon or one of {', '.join(names)}")
+            icon = self.style().standardIcon(names[icon])
+        if icon is not None:
+            b.setIcon(icon)
+            if not text:
+                b.setFixedSize(26, 24)
         b.setToolTip(tooltip)
         b.setCursor(Qt.PointingHandCursor)
         b.clicked.connect(callback)
@@ -864,6 +973,124 @@ class GalleryWidget(QWidget):
     def _on_library_changed(self) -> None:
         self._libraryChanged.emit()  # may come from any thread; coalesced on the GUI thread
 
+    # ---------------------------------------------------------------- UI state
+    UI_STATE_VERSION = 1
+
+    def ui_state(self) -> dict:
+        """What a user set up, as plain JSON-able data: the search text, the selected
+        category, collapsed panes, tile size and pane sizes. A host can store it (a
+        node parameter, a file) and give it back with :meth:`set_ui_state`."""
+        sizes = {}
+        for name, pane in self.panes.items():
+            sizes[name] = self._pane_size(pane)
+        sizes["column"] = self._pane_size(self.area.column)
+        category = self._pending_category if self._pending_category is not None else self.tree.current_path()
+        return {
+            "version": self.UI_STATE_VERSION,
+            "search": self.search.text(),
+            "category": list(category),
+            "collapsed": [n for n, p in self.panes.items() if p.is_collapsed()],
+            "tile_size": self.size_slider.value(),
+            "sizes": sizes,
+        }
+
+    def set_ui_state(self, state: "dict | str") -> None:
+        """Restore :meth:`ui_state` output (a dict or its JSON). Missing keys are left
+        as they are; a category that isn't loaded yet is selected once it appears.
+        Doesn't emit ``uiStateChanged``."""
+        if isinstance(state, str):
+            state = json.loads(state) if state.strip() else {}
+        if not isinstance(state, dict):
+            raise ValueError("ui state must be a dict or a JSON object")
+        self._state_quiet = True
+        try:
+            if "collapsed" in state:
+                folded = set(state["collapsed"] or ())
+                for name in self.panes:
+                    if self.panes[name].is_enabled():
+                        self.area.set_collapsed(name, name in folded)
+            sizes = state.get("sizes") or {}
+            for name, pane in self.panes.items():          # after collapsing, which records
+                if isinstance(sizes.get(name), int) and sizes[name] > 0:   # the current sizes
+                    self.area._saved[id(pane)] = sizes[name]
+            if isinstance(sizes.get("column"), int) and sizes["column"] > 0:
+                self.area._saved[id(self.area.column)] = sizes["column"]
+            if sizes:
+                self._apply_sizes()
+            if isinstance(state.get("tile_size"), int):
+                self.size_slider.setValue(state["tile_size"])
+            if "search" in state:
+                self.search.blockSignals(True)              # no debounced echo of the restore
+                self.search.setText(str(state["search"] or ""))
+                self.search.blockSignals(False)
+                self._run_query(self.search.text())
+            if "category" in state:
+                self._pending_category = tuple(state["category"] or ())
+                self._apply_pending_category()
+        finally:
+            self._state_quiet = False
+            self._state_timer.stop()
+            self._sizes_moved = False
+            self._last_state = self.ui_state()
+
+    def save_ui_state(self, path: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.ui_state(), f, indent=2)
+
+    def load_ui_state(self, path: str) -> None:
+        with open(path, encoding="utf-8") as f:
+            self.set_ui_state(json.load(f))
+
+    def _pane_size(self, w: QWidget) -> int:
+        s = w.parentWidget()
+        if isinstance(s, QSplitter) and not w.isHidden():
+            size = s.sizes()[s.indexOf(w)]
+            if size > 0:
+                return size
+        return int(self.area._saved.get(id(w), 0))
+
+    def _apply_sizes(self) -> None:
+        for s in (self.area.splitter, self.area.column):
+            sizes = [0 if s.widget(i).isHidden() else self.area._saved.get(id(s.widget(i)), 0) or s.sizes()[i]
+                     for i in range(s.count())]
+            if any(sizes):
+                s.setSizes(sizes)
+
+    def _apply_pending_category(self) -> None:
+        path = self._pending_category
+        if path is None or path not in self.tree._rows:
+            return                                          # not loaded yet: try after the next load
+        self._pending_category = None
+        self.tree.blockSignals(True)
+        self.tree.select_path(path)
+        self.tree.blockSignals(False)
+        self._path_filter = path
+        self._apply_filters()
+
+    def _on_user_category(self, _path) -> None:
+        self._pending_category = None                       # the user chose: forget the restore
+        self._state_timer.start()
+
+    def _on_splitter_moved(self, *_args) -> None:
+        self._sizes_moved = True
+        self._state_timer.start()
+
+    @staticmethod
+    def _without_sizes(state: dict) -> dict:
+        return {k: v for k, v in state.items() if k != "sizes"}
+
+    def _emit_ui_state(self) -> None:
+        """Report a change. Pane sizes alone count only when a splitter was dragged:
+        the layout also resizes panes by itself (window resizes, settling after a
+        restore), and that isn't something the user did."""
+        if self._state_quiet:
+            return
+        state = self.ui_state()
+        moved, self._sizes_moved = self._sizes_moved, False
+        if moved or self._without_sizes(state) != self._without_sizes(self._last_state):
+            self._last_state = state
+            self.uiStateChanged.emit(state)
+
     def _refresh_from_library(self) -> None:
         if self._auto_aspect and len(self.library):
             aspect = float(next(iter(self.library)).metadata.get("tile_aspect") or 16 / 9)
@@ -876,8 +1103,25 @@ class GalleryWidget(QWidget):
         self._path_filter = self.tree.current_path()
         self.search.set_vocabulary(list(self.library.tags()), list(self.library.categories()))
         self._update_drawer_index()
+        if hasattr(self, "_name_format"):
+            self._update_shared_titles()
         self._run_query(self.search.text())
+        if getattr(self, "_pending_category", None) is not None:
+            self._apply_pending_category()
+        self._refresh_details()
 
+    def _refresh_details(self) -> None:
+        """After the library changed (a reload, a poll): the details panel shows the
+        item it had, as it is now, e.g. a new version's rows. Unchanged items are left
+        alone so a playing preview isn't restarted; a removed one clears the panel."""
+        shown = self.details.item
+        if shown is None:
+            return
+        current = self.library.get(shown.id)
+        if current is None:
+            self.details.set_item(None)
+        elif current != shown:
+            self.details.set_item(current)
     def _update_drawer_index(self) -> None:
         if not self.has_drawer():
             return
@@ -892,6 +1136,16 @@ class GalleryWidget(QWidget):
         self.drawer.refresh()
         self._update_marks()
 
+    DRAWER_PATH = ("@drawer",)                     # the pinned "Assigned" category
+
+    def _update_drawer_category(self, members: set[str]) -> None:
+        if not getattr(self, "_drawer_category", None) or not self.has_drawer():
+            return
+        before = self.tree.ids.get(self.DRAWER_PATH)
+        self.tree.set_special(self.DRAWER_PATH, self._drawer_category, members)
+        if self._path_filter == self.DRAWER_PATH and before != members:
+            self._apply_filters()                  # showing it: add / drop the tiles now
+
     def _update_marks(self) -> None:
         """Tile badges: {item id: (enabled, state)} for items in the drawer."""
         marks = {}
@@ -902,6 +1156,7 @@ class GalleryWidget(QWidget):
         if marks != self.delegate.marks:
             self.delegate.marks = marks
             self.view.viewport().update()
+        self._update_drawer_category(set(marks))
         self._update_drawer_run()
 
     def _update_drawer_run(self) -> None:
@@ -924,9 +1179,23 @@ class GalleryWidget(QWidget):
         self._update_marks()
         self.drawerChanged.emit(entries)
 
-    def _drawer_icon(self, item: GalleryItem):
+    def _drawer_icon(self, item: GalleryItem | None):
+        """A drawer row's icon: the thumbnail; the tiles' "no preview" icon when the
+        item has none or isn't in the library; None (blank) while it's loading."""
+        if item is None or self.cache.failed(item.id):
+            return self._drawer_placeholder()
         pix = self.cache.poster(item)
         return QIcon(pix) if pix is not None and not pix.isNull() else None
+
+    def _drawer_placeholder(self) -> QIcon | None:
+        if self._drawer_placeholder_icon is None and self.delegate.placeholder is not None:
+            pix = QPixmap(48, 27)
+            pix.fill(self.theme.c("image_bg"))
+            p = QPainter(pix)
+            self.delegate.placeholder.paint(p, QRect(15, 4, 19, 19))
+            p.end()
+            self._drawer_placeholder_icon = QIcon(pix)
+        return self._drawer_placeholder_icon
 
     def _run_query(self, text: str) -> None:
         self._search_ids = self.library.search(text)
@@ -971,7 +1240,7 @@ class GalleryWidget(QWidget):
         self.details.set_item(item)
         self.currentChanged.emit(item)
 
-    def _on_thumb_ready(self, item_id: str) -> None:
+    def _on_thumb_ready(self, item_id: str) -> None:       # also sent when one fails
         self.view.refresh_item(self.model.index_of(item_id))
         if item_id in self.delegate.marks:
             self.drawer.refresh_icons()

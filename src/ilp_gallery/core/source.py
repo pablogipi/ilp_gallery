@@ -69,7 +69,8 @@ class Changes:
 
 
 def make_record(path: str, id: str | None = None, name: str | None = None, *,
-                type: str | None = None, categories: Iterable[str] = (), tags: Iterable[str] = (),
+                type: str | None = None, category: str | None = None,
+                categories: Iterable[str] = (), tags: Iterable[str] = (),
                 description: str = "", thumbnail: str | None = None,
                 type_label: str | None = None, category_paths: Iterable[Iterable[str]] | None = None,
                 display: Iterable[tuple[str, Any]] | dict | None = None, tile_aspect: float | None = None,
@@ -79,12 +80,22 @@ def make_record(path: str, id: str | None = None, name: str | None = None, *,
     ``path``           the media shown/played (image, gif, movie) or any file
     ``thumbnail``      optional smaller image for the tile
     ``type_label``     subtitle under the tile ("Model", "Surface", ...)
-    ``category_paths`` tree hierarchy: [["assets", "props", "chairs"]]
+    ``category``       the item's main category ("locomotion"); ``item.category``
+    ``category_paths`` tree hierarchy: [["locomotion", "run"]]; default [[category]]
+    ``categories``     flat list searched by ``cat:``; default: ``category`` plus every
+                       segment of ``category_paths``
     ``display``        details-panel rows: [("Version", 12), ("Artist", "pablo")] or a dict
     ``**metadata``     anything else; searchable with ``meta:`` and available to
                        exporters via ``arg="<key>"``
     """
     meta = dict(metadata)
+    if category:
+        meta["category"] = str(category)
+        if not category_paths:
+            category_paths = [[category]]
+    if not categories:                    # cat: finds the category and every tree level
+        segs = ([category] if category else []) + [s for p in category_paths or () for s in p]
+        categories = list(dict.fromkeys(str(s) for s in segs if s))
     if type_label:
         meta["type_label"] = type_label
     if category_paths:

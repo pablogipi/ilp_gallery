@@ -86,6 +86,7 @@ class CategoryTree(QTreeView):
         self.pressed.connect(self._remember_state)
         self.clicked.connect(self._on_clicked)
         self._press_state: tuple[QModelIndex, bool, bool] | None = None
+        self._special: dict[Path, tuple[str, set[str]]] = {}     # set_special()
 
     def _setup_header(self) -> None:
         h = self.header()
@@ -101,6 +102,8 @@ class CategoryTree(QTreeView):
             for path in item_paths(it):
                 for depth in range(1, len(path) + 1):
                     ids.setdefault(path[:depth], set()).add(it.id)
+        for path, (_label, members) in self._special.items():
+            ids[path] = set(members)
         self.ids = ids
         self._total = len(library)
 
@@ -110,29 +113,71 @@ class CategoryTree(QTreeView):
         self._rows = {}
         root = self._model.invisibleRootItem()
         self._add_row(root, (), "All assets", bold=True)
+        for path, (label, _members) in self._special.items():     # pinned under "All assets"
+            self._add_row(root, path, label, italic=True)
 
         def sort_key(p: Path):
             return (_TOP_ORDER.get(p[-1], 999) if len(p) == 1 else 0, display_name(p[-1], len(p) - 1).lower())
 
-        for path in sorted(ids, key=lambda p: (len(p), sort_key(p))):
+        for path in sorted((p for p in ids if p not in self._special), key=lambda p: (len(p), sort_key(p))):
             parent = root if len(path) == 1 else self._rows[path[:-1]][0]
             self._add_row(parent, path, display_name(path[-1], len(path) - 1))
         self.update_counts(None)
         self.select_path(current if current in self._rows else ())
 
-    def _add_row(self, parent: QStandardItem, path: Path, label: str, bold: bool = False) -> None:
+    def _add_row(self, parent: QStandardItem, path: Path, label: str, bold: bool = False,
+                 italic: bool = False) -> None:
         name = QStandardItem(label)
         name.setData(path, PathRole)
         count = QStandardItem("")
         count.setData(path, PathRole)
         count.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         count.setForeground(self._theme.c("muted"))
-        if bold:
+        if bold or italic:
             f = name.font()
-            f.setBold(True)
+            f.setBold(bold)
+            f.setItalic(italic)
             name.setFont(f)
         parent.appendRow([name, count])
         self._rows[path] = (name, count)
+
+    # -- pinned rows ---------------------------------------------------
+    def set_special(self, path: Path, label: str, members) -> None:
+        """A pinned row under "All assets" with its own members (e.g. the items in a
+        drawer). Selecting it filters to them like a category; calling again updates
+        the members (and the label) without rebuilding the tree."""
+        path = tuple(path)
+        members = set(members)
+        is_new = path not in self._special
+        self._special[path] = (label, members)
+        self.ids[path] = members
+        if path in self._rows:
+            self._rows[path][0].setText(label)
+        elif is_new:
+            root = self._model.invisibleRootItem()
+            name = QStandardItem(label)                     # insert below "All assets"
+            name.setData(path, PathRole)
+            f = name.font()
+            f.setItalic(True)
+            name.setFont(f)
+            count = QStandardItem("")
+            count.setData(path, PathRole)
+            count.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            count.setForeground(self._theme.c("muted"))
+            root.insertRow(len(self._special), [name, count])
+            self._rows[path] = (name, count)
+        self.update_counts(self._visible)
+
+    def remove_special(self, path: Path) -> None:
+        path = tuple(path)
+        if self._special.pop(path, None) is None:
+            return
+        self.ids.pop(path, None)
+        row = self._rows.pop(path, None)
+        if row is not None:
+            if self.current_path() == path:
+                self.select_path(())
+            self._model.invisibleRootItem().removeRow(row[0].row())
 
     # -- counts / selection --------------------------------------------
     def update_counts(self, visible: set[str] | None) -> None:

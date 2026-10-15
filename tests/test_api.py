@@ -350,3 +350,21 @@ def test_source_failure_reports_full_traceback(app, gallery, caplog):
     assert "Traceback (most recent call last)" in err
     assert "in parse_publish" in err and "in load" in err       # down to the user's code
     assert any("in parse_publish" in r.getMessage() for r in caplog.records)
+
+
+def test_make_record_category():
+    from ilp_gallery.core import GalleryItem, make_record
+    r = make_record("/p/run.fbx", name="locomotion__run__fwd", category="locomotion",
+                    category_paths=[["locomotion", "run"]])
+    it = GalleryItem.from_dict(r)
+    assert it.category == "locomotion"
+    assert it.category_paths == [["locomotion", "run"]]          # the tree only
+    assert it.categories == ["locomotion", "run"]                 # cat: finds both levels
+    only = GalleryItem.from_dict(make_record("/p/a.fbx", category="crowd"))
+    assert only.category_paths == [["crowd"]] and only.categories == ["crowd"]
+    explicit = GalleryItem.from_dict(make_record("/p/b.fbx", category="crowd", categories=["x"]))
+    assert explicit.categories == ["x"] and explicit.category == "crowd"
+    legacy = GalleryItem.from_dict(make_record("/p/c.fbx", categories=["fx", "fire"]))
+    assert legacy.category == "fx"                                # no category: first one
+    tree = GalleryItem.from_dict(make_record("/p/d.fbx", category_paths=[["props", "chairs"]]))
+    assert tree.category == "props"

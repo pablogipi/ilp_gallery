@@ -32,15 +32,16 @@ import os
 from dataclasses import dataclass, replace
 from typing import Callable, Iterable
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
+from PySide6.QtCore import QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMenu, QPushButton,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMenu,
+    QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 from ..core.item import GalleryItem
 from .actions import MIME_ITEMS
+from .names import NameFormat, chip_color, format_name, stub_item, tooltip_html
 
 STATE_OK, STATE_OUTDATED, STATE_MISSING = "ok", "outdated", "missing"
 OUTDATED_COLOR = QColor("#e0a030")
@@ -104,6 +105,54 @@ def build_key_index(items: Iterable[GalleryItem], key: str) -> tuple[dict[str, G
             dupes.add(k)
         index[k] = it
     return index, sorted(dupes)
+
+
+class _RowDelegate(QStyledItemDelegate):
+    """Drawer rows with a name format: the title, then the second line in the muted
+    colour, on one line; the category's chip colour as a border around the thumbnail.
+    The style still draws the checkbox, icon and selection."""
+
+    def __init__(self, drawer: "DrawerWidget") -> None:
+        super().__init__(drawer)
+        self._drawer = drawer
+
+    def paint(self, p, option, index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        entry = index.data(EntryRole)
+        parts = self._drawer.parts_for(entry.key if entry else opt.text)
+        font = QFont(opt.font)
+        fg = index.data(Qt.ForegroundRole)
+        color = fg.color() if hasattr(fg, "color") else (QColor(fg) if fg is not None else self._drawer._text)
+        opt.text = ""
+        widget = opt.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, p, widget)
+        r = style.subElementRect(QStyle.SE_ItemViewItemText, opt, widget).adjusted(2, 0, -2, 0)
+        p.save()
+        if parts.chip:                       # the category's colour around the thumbnail
+            icon = style.subElementRect(QStyle.SE_ItemViewItemDecoration, opt, widget)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(QPen(chip_color(parts), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(icon).adjusted(-1, -1, 1, 1), 2, 2)
+        x = r.left()
+        p.setFont(font)
+        p.setPen(color)
+        fm = QFontMetrics(font)
+        title = fm.elidedText(parts.title, Qt.ElideRight, max(0, r.right() - x))
+        p.drawText(QRect(x, r.top(), r.right() - x, r.height()), Qt.AlignLeft | Qt.AlignVCenter, title)
+        x += fm.horizontalAdvance(title) + 10
+        if parts.subtitle and x < r.right() - 20:
+            sub_font = QFont(font)
+            sub_font.setBold(False)
+            sub_font.setPointSizeF(max(7.0, font.pointSizeF() * 0.88))
+            p.setFont(sub_font)
+            p.setPen(self._drawer._muted)
+            sfm = QFontMetrics(sub_font)
+            p.drawText(QRect(x, r.top(), r.right() - x, r.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                       sfm.elidedText(parts.subtitle, Qt.ElideRight, r.right() - x))
+        p.restore()
 
 
 class _DrawerList(QListWidget):
@@ -182,6 +231,11 @@ class DrawerWidget(QWidget):
         self.path_key = path_key
         self.entry_factory: Callable[[GalleryItem], DrawerEntry | None] | None = None
         self._actions: list[tuple[str, Callable, bool]] = []   # add_action()
+        self._current_key: str | None = None                    # set_current_key()
+        self.name_format: NameFormat | None = None              # set_name_format()
+        self.show_paths = True                                  # paths in tooltips
+        self._current_bg = QColor(70, 130, 220, 60)
+        self.current_label = "Current"                          # tooltip line for it
         self.resolver: Callable[[str], GalleryItem | None] = lambda k: None
         self.by_id: Callable[[str], GalleryItem | None] = lambda i: None
         self.icon_for: Callable[[GalleryItem], QIcon | None] = lambda it: None
@@ -354,12 +408,36 @@ class DrawerWidget(QWidget):
     def refresh_icons(self) -> None:
         for row in range(self.list.count()):
             li = self.list.item(row)
-            item = self.resolver(li.data(EntryRole).key)
-            icon = self.icon_for(item) if item is not None else None
+            icon = self.icon_for(self.resolver(li.data(EntryRole).key))
             if icon is not None:
                 li.setIcon(icon)
 
-    def set_colors(self, text: QColor, muted: QColor) -> None:
+    def parts_for(self, key: str):
+        """NameParts for an entry: from its library item, or a stand-in when missing."""
+        item = self.resolver(key)
+        return format_name(self.name_format, item if item is not None else stub_item(key))
+
+    def set_name_format(self, fmt: NameFormat | None) -> None:
+        """How entry names are shown (see ui/names.py); the full name stays in the
+        tooltip and is still the entry's key."""
+        self.name_format = fmt
+        self.list.setItemDelegate(_RowDelegate(self) if fmt is not None else QStyledItemDelegate(self.list))
+        self.list.viewport().update()
+
+    def set_current_key(self, key: str | None) -> None:
+        """Mark one entry as the current one (bold, tinted row), e.g. the clip a host
+        node is showing; None clears it. Not an edit: no ``entriesChanged``."""
+        if key != self._current_key:
+            self._current_key = key
+            self._rebuild()
+
+    def current_key(self) -> str | None:
+        return self._current_key
+
+    def set_colors(self, text: QColor, muted: QColor, accent: QColor | None = None) -> None:
+        if accent is not None:
+            self._current_bg = QColor(accent)
+            self._current_bg.setAlpha(60)
         self._text, self._muted = QColor(text), QColor(muted)
         self._rebuild()
 
@@ -380,11 +458,12 @@ class DrawerWidget(QWidget):
             li.setData(EntryRole, e)
             li.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
             li.setCheckState(Qt.Checked if e.enabled else Qt.Unchecked)
-            tip = [e.key, f"Path: {e.path or '(none)'}"]
+            tip = [f"Path: {e.path or '(none)'}"] if self.show_paths else []
             if state == STATE_OUTDATED:
                 outdated += 1
                 li.setForeground(OUTDATED_COLOR)
-                tip.append(f"Library has a newer path: {library_path(item, self.path_key)}")
+                tip.append(f"Library has a newer path: {library_path(item, self.path_key)}"
+                           if self.show_paths else "A newer version is in the library")
             elif state == STATE_MISSING:
                 missing += 1
                 li.setForeground(self._muted)
@@ -396,9 +475,15 @@ class DrawerWidget(QWidget):
                 li.setForeground(self._text)
             if not e.enabled:
                 tip.append("Disabled")
+            if e.key == self._current_key:                 # e.g. the agent's current clip
+                f = QFont(li.font())
+                f.setBold(True)
+                li.setFont(f)
+                li.setBackground(self._current_bg)
+                tip.append(self.current_label)
             enabled += e.enabled
-            li.setToolTip("\n".join(tip))
-            icon = self.icon_for(item) if item is not None else None
+            li.setToolTip(tooltip_html(e.key, self.parts_for(e.key), tip))
+            icon = self.icon_for(item)                   # None: missing from the library
             li.setIcon(icon if icon is not None else self._blank)
             self.list.addItem(li)
             li.setSelected(e.key in selected)

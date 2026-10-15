@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QRectF, QSize, Qt
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
@@ -10,6 +10,7 @@ from ..core.item import MEDIA_GIF, MEDIA_MOVIE, GalleryItem
 from ..media.thumbs import ThumbnailCache
 from . import theme
 from .model import ItemRole
+from .names import format_name, paint_chip, split_title
 
 BADGE = {MEDIA_MOVIE: "MOV", MEDIA_GIF: "GIF"}
 MARK_OK = QColor("#3fae5a")       # drawer badge: in the drawer, path up to date
@@ -37,6 +38,9 @@ class TileDelegate(QStyledItemDelegate):
         self.hover_fraction = 0.0
         self.marks: dict[str, tuple[bool, str]] = {}   # item id -> (enabled, drawer state)
         self.media_badges = True                         # the MOV / GIF corner labels
+        self.name_format = None                          # see ui/names.py
+        self.subtitles = "always"                        # "always" | "when_needed" | "never"
+        self.shared_titles: set[str] = set()             # titles used by more than one item
         self.set_theme(theme.ILP)
 
     def set_theme(self, t: theme.Theme) -> None:
@@ -128,6 +132,10 @@ class TileDelegate(QStyledItemDelegate):
         if mark is not None:
             self._paint_mark(p, img_rect, *mark)
 
+        parts = format_name(self.name_format, item)
+        if parts.chip:
+            paint_chip(p, parts, QPoint(img_rect.left() + 5, img_rect.top() + 5), option.font)
+
         # name + subtitle
         name_font = QFont(option.font)
         name_font.setWeight(QFont.DemiBold)
@@ -136,14 +144,27 @@ class TileDelegate(QStyledItemDelegate):
         nfm, sfm = QFontMetrics(name_font), QFontMetrics(sub_font)
         x, w = img_rect.left() + 1, img_rect.width() - 2
         y = img_rect.bottom() + 5
+        title, overflow = parts.title, ""
+        if parts.wrap:                                   # the rest of a long title goes on line two
+            title, overflow = split_title(parts.title, lambda t: nfm.horizontalAdvance(t) <= w)
         p.setFont(name_font)
         p.setPen(self._text)
         p.drawText(QRect(x, y, w, nfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
-                   nfm.elidedText(item.name, Qt.ElideRight, w))
+                   nfm.elidedText(title, Qt.ElideRight, w))
         p.setFont(sub_font)
         p.setPen(self._muted)
+        if overflow:
+            sub = overflow
+            if (parts.subtitle and self.subtitles != "never"
+                    and (self.subtitles == "always" or parts.title in self.shared_titles)):
+                sub = f"{overflow} · {parts.subtitle}"   # still tell shared titles apart
+        else:
+            sub = parts.subtitle if parts.subtitle is not None else subtitle(item)
+            if self.subtitles == "never" or (self.subtitles == "when_needed"
+                                             and parts.title not in self.shared_titles):
+                sub = ""                                 # the title alone tells it apart
         p.drawText(QRect(x, y + nfm.height(), w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
-                   sfm.elidedText(subtitle(item), Qt.ElideRight, w))
+                   sfm.elidedText(sub, Qt.ElideRight, w))
 
         if self._bevel:
             self._paint_bevel(p, option.rect, selected)

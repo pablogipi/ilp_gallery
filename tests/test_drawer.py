@@ -221,3 +221,66 @@ def test_drawer_context_menu_actions(app, gallery):
     next(a for a in two.actions() if a.text().startswith("Remove Items")).trigger()
     assert gallery.drawer.keys() == []
     assert gallery.drawer.context_menu([]) is None
+
+
+def test_drawer_uses_the_placeholder_for_missing_media(app, gallery):
+    gallery.set_drawer([("walk", "/clips/walk_v001.fbx"), ("gone", "/x.fbx")])
+    lst = gallery.drawer.list
+    assert wait(app, lambda: gallery.cache.failed("walk-v1"))      # no such media: fails
+    spin_until = time.time() + 1
+    while time.time() < spin_until:
+        app.processEvents()
+    placeholder = gallery._drawer_placeholder()
+    assert placeholder is not None
+    for row in (0, 1):                                              # failed and missing entries
+        assert lst.item(row).icon().cacheKey() == placeholder.cacheKey()
+
+
+def test_details_follow_a_new_version(app, gallery):
+    gallery.set_collapsed("details", False)
+    gallery.select("run-v2")
+    assert wait(app, lambda: gallery.details.item is not None and gallery.details.item.id == "run-v2")
+    shown = gallery.details.item
+    gallery.records[1] = make_record("/clips/run_v002.fbx", id="run-v2", name="run",
+                                     display={"Version": 3})                 # republished
+    gallery.reload_source(gallery.src, background=False)
+    assert wait(app, lambda: gallery.details.item is not shown)
+    assert gallery.details.item.display == [["Version", 3]] and "Version" in gallery.details.info.text()
+    again = gallery.details.item
+    gallery.reload_source(gallery.src, background=False)                     # nothing changed
+    spin_until = time.time() + 0.3
+    while time.time() < spin_until:
+        app.processEvents()
+    assert gallery.details.item is again                                     # not reset
+    gallery.records.pop(1)                                                   # retired
+    gallery.reload_source(gallery.src, background=False)
+    assert wait(app, lambda: gallery.details.item is None or gallery.details.item.id != "run-v2")
+
+
+def test_assigned_category(app, gallery):
+    tree = gallery.tree
+    path = gallery.DRAWER_PATH
+    assert path in tree._rows and tree._rows[path][0].text() == "Assigned"
+    assert tree._rows[path][0].row() == 1                                 # right under "All assets"
+    gallery.add_to_drawer(items(gallery, "walk", "run"))
+    assert tree.ids[path] == {"walk-v1", "run-v2"} and tree._rows[path][1].text() == "2"
+    tree.select_path(path)
+    assert wait(app, lambda: sorted(gallery.model.ids()) == ["run-v2", "walk-v1"])
+    gallery.drawer.remove_keys(["walk"])                                  # follows the drawer
+    assert gallery.model.ids() == ["run-v2"]
+    gallery.reload_source(gallery.src, background=False)                  # survives rebuilds
+    assert wait(app, lambda: tree.current_path() == path and gallery.model.ids() == ["run-v2"])
+    gallery.set_ui_state({"category": list(path)})
+    assert gallery.ui_state()["category"] == list(path)
+    gallery.set_drawer_visible(False)
+    assert path not in tree._rows and tree.current_path() == ()
+
+
+def test_no_assigned_category_without_a_drawer(app):
+    from ilp_gallery.ui.widget import GalleryWidget
+    w = GalleryWidget()
+    assert GalleryWidget.DRAWER_PATH not in w.tree._rows
+    w.close()
+    w = GalleryWidget(drawer=True, drawer_category=None)
+    assert GalleryWidget.DRAWER_PATH not in w.tree._rows
+    w.close()

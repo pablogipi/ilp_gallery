@@ -13,12 +13,13 @@ from PySide6.QtWidgets import (
 from ..core.item import GalleryItem
 from . import theme
 from .delegate import subtitle
+from .names import format_name
 from .player import PlayerWidget
 from .tree import display_name, item_paths
 
 # metadata keys that are plumbing, not information
 HIDDEN_META = {
-    "source", "importer_version", "tile_aspect", "type_label", "category_paths", "display",
+    "source", "importer_version", "tile_aspect", "type_label", "category", "category_paths", "display",
     "asset_dir", "json", "json_mtime", "maps", "resolutions", "megascans_type",
 }
 
@@ -71,6 +72,8 @@ class DetailPanel(QWidget):
         self.preview_btn.setVisible(False)
         self._preview_on = False
         self.can_preview = lambda item: item.motion is not None   # set by the gallery
+        self.name_format = None           # set by the gallery: detail rows, see ui/names.py
+        self.show_paths = True            # Location and "Open folder"
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
         export_group = QHBoxLayout()
@@ -174,8 +177,15 @@ class DetailPanel(QWidget):
             self.info.setText("")
             return
         self.title.setStyleSheet("")
-        self.title.setText(item.name)
-        self.sub.setText(f"{item.id if item.id != item.path else ''}   {subtitle(item)}".strip())
+        # let long names_like__this wrap at their separators (zero-width spaces)
+        self.title.setText(item.name.replace("__", "__\u200b").replace("/", "/\u200b"))
+        self.folder_btn.setVisible(self.show_paths)
+        if format_name(self.name_format, item).details:
+            self.sub.setText("")                         # the detail rows say it all
+        else:
+            ident = item.id if item.id not in (item.path, item.name) else ""
+            self.sub.setText(f"{ident}   {subtitle(item)}".strip())
+        self.sub.setVisible(bool(self.sub.text()))
         self.info.setText(self._html(item))
 
     def set_theme(self, t: theme.Theme) -> None:
@@ -191,6 +201,21 @@ class DetailPanel(QWidget):
         esc = html.escape
         parts = [f"<style>a {{ color: {link}; text-decoration: none; }} td {{ padding: 2px 14px 2px 0; }}"
                  f" .k {{ color: {muted}; }} h4 {{ margin: 12px 0 4px 0; }}</style>"]
+
+        detail = format_name(self.name_format, it).details
+        if detail:
+            # The host's own rows (e.g. Category, Action, Variations) replace the
+            # category breadcrumbs and tags; the record's display rows follow.
+            rows = [*detail, *(it.metadata.get("display") or [])]
+            parts.append("<table cellspacing='0'>" + "".join(
+                f"<tr><td class='k' valign='top'>{esc(str(k))}</td><td>{esc(str(v))}</td></tr>"
+                for k, v in rows) + "</table>")
+            if it.description:
+                parts.append(f"<p>{esc(it.description)}</p>")
+            if self.show_paths:
+                folder = it.metadata.get("asset_dir") or os.path.dirname(it.path)
+                parts.append(f"<h4>Location</h4><span class='k'>{esc(folder)}</span>")
+            return "".join(parts)
 
         # categories as clickable breadcrumbs
         crumbs = []
@@ -232,8 +257,9 @@ class DetailPanel(QWidget):
                 tex.append("<span class='k'>Resolutions:</span> " + " · ".join(esc(_res_label(r)) for r in res))
             parts.append("<h4>Textures</h4>" + "<br>".join(tex))
 
-        folder = it.metadata.get("asset_dir") or os.path.dirname(it.path)
-        parts.append(f"<h4>Location</h4><span class='k'>{esc(folder)}</span>")
+        if self.show_paths:
+            folder = it.metadata.get("asset_dir") or os.path.dirname(it.path)
+            parts.append(f"<h4>Location</h4><span class='k'>{esc(folder)}</span>")
         return "".join(parts)
 
     def _on_link(self, href: str) -> None:

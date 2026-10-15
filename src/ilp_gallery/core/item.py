@@ -116,6 +116,17 @@ class GalleryItem:
         return self.metadata.get("category_paths") or []
 
     @property
+    def category(self) -> str:
+        """The item's main category: ``metadata["category"]`` (make_record's
+        ``category=``), else the first tree level, else the first of ``categories``."""
+        if self.metadata.get("category"):
+            return str(self.metadata["category"])
+        paths = self.category_paths
+        if paths and paths[0]:
+            return str(paths[0][0])
+        return self.categories[0] if self.categories else ""
+
+    @property
     def display(self) -> list[list[Any]]:
         return self.metadata.get("display") or []
 

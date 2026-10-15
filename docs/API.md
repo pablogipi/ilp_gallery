@@ -21,7 +21,8 @@ make_record(
     id="sg-pub-4411",                      # unique across sources (default: the path)
     name="chairA model",
     thumbnail="/show/pub/chairA_v012.jpg", # optional tile image
-    categories=["Model", "chairA"],        # flat, searchable with cat:
+    category="asset",                      # main category: item.category
+    categories=["Model", "chairA"],        # flat, searchable with cat: (default: category + tree levels)
     tags=["hero", "approved"],             # searchable with tag:
     description="Hero chair, lookdev ready",
     type_label="Model",                    # subtitle under the tile
@@ -33,7 +34,9 @@ make_record(
 )
 ```
 
-Reserved `metadata` keys the UI reads: `type_label`, `category_paths`, `display`, `tile_aspect`, `preview`. On a `GalleryItem` they are also exposed as `item.type_label`, `item.category_paths`, `item.display` and `item.preview`.
+Reserved `metadata` keys the UI reads: `type_label`, `category`, `category_paths`, `display`, `tile_aspect`, `preview`. On a `GalleryItem` they are also exposed as `item.type_label`, `item.category`, `item.category_paths`, `item.display` and `item.preview`.
+
+`category` is the item's main category. When it's given, `category_paths` (the tree) defaults to `[[category]]`, and `categories` (searched by `cat:`) defaults to the category plus every level of the tree paths. Without it, `item.category` is the first tree level, or the first of `categories`.
 
 **Previews.** Items that don't move themselves (a published clip, a model, a rig) can carry a `preview`. A movie or GIF scrubs on hover, plays in the details panel and gives the tile its poster (first frame) unless a `thumbnail` is set; a still image is used as the thumbnail. `item.motion` is the `(path, type)` that plays: the item itself if it's a movie, else its preview. Items with nothing to show get a warning icon (Houdini's own inside Houdini); `gallery.set_placeholder("icon.svg")` changes it. `item.value("json")` reads any field or metadata key.
 
@@ -182,9 +185,11 @@ g.set_drawer(load())                                         # silent: no drawer
 - **Entries** are `DrawerEntry(key, path, enabled)`. `key` is the value of the `drawer_key` field (default `"name"`), so an entry survives a new version with a new path. `set_drawer()` also takes `(key, path, enabled)` tuples, `{"key", "path", "enabled"}` dicts or bare keys.
 - **States** against the library: `ok` (the stored path matches), `outdated` (the library has another path: shown in orange, with "Update to latest" per entry and "Update all") and `missing` (the key isn't in the library: kept, shown greyed out). Duplicate key values in the library are logged; the last loaded wins.
 - **Editing:** "Add to drawer" heads the tile context menu; tiles can be dropped on the drawer; rows reorder by drag, and have an enable checkbox, Remove, Clear and a context menu (Update to latest, Enable, Disable, Show in gallery).
+- **Assigned category:** with a drawer, the categories tree gets a pinned row under "All assets", in italics, listing the items in the drawer with their count. It follows the drawer as entries are added or removed, and survives reloads and the UI state. `drawer_category="In batch"` renames it; `None` leaves it out.
 - **Tile badges:** a filled disc with a tick for enabled entries and a ring for disabled ones; green when the path is current, orange when it's outdated (`MARK_OK` / `MARK_OUTDATED` in `ui/delegate.py`).
 - **What an entry stores:** `drawer_key` is the identity field and `drawer_path` the field kept as its path, so a Megascans batch can use `GalleryBrowser(drawer=True, drawer_key="id", drawer_path="json")`. For full control set `gallery.drawer.entry_factory` to a function `GalleryItem -> DrawerEntry | (key, path, enabled) | None` (None: can't be added).
 - **Running on the drawer:** once an exporter is registered, the drawer shows a run button with the main action's label ("Ingest (12)"). It calls `export_drawer()`, which runs the default exporter, or the one passed in, on the enabled entries in drawer order and skips missing ones.
+- **Thumbnails:** rows use the item's thumbnail; an item with no usable media, or an entry that isn't in the library, gets the same "no preview" icon as the tiles.
 - **Preview:** clicking a row shows its library item in the details panel when the panel is open. An outdated entry previews the library's current version.
 - **Removing by drag:** rows dragged out of the drawer onto the gallery are removed.
 - **Context menu actions:** `add_drawer_action(label, callback, single=False)` adds an entry at the top of the rows' context menu; `callback` receives the selected `DrawerEntry` objects in drawer order, and `single=True` offers it only when one row is selected. The built-in entries follow: Update to latest, Enable, Disable, Show in gallery, Remove Item. A callback that raises is logged.
@@ -294,4 +299,49 @@ g.add_toolbar_widget(QLabel(node.path()))   # beside the size control
 - **Pane names:** `"tree"`, `"grid"`, `"details"`, `"drawer"`; the panes are in `g.panes`, the layout in `g.area`. When one pane of the right column collapses the other takes its height; when both do, the column's width goes to the tiles. A collapsed details panel stops the player and isn't updated until it opens again. The drawer's tab shows its count ("Clips: 4"). `show_sidebar` / `show_details` / `drawer` remove a pane completely (no tab).
 - **Tile size:** `tile_size` sets the starting width (90 to 420; 90 is the most compact). `size_control="wheel"` swaps the slider for the SGI thumbwheel (drag it like ivview's Dolly wheel); it takes its colours from any theme. `size_label=False` drops the "Size" label in front of the control, and `media_badges=False` hides the MOV / GIF labels on the tiles.
 - **Second row:** `add_toolbar_widget(widget, row=1)` puts widgets in a row under the search bar, left to right in the order added (`side="right"` right-aligns them). The row stays hidden until something is added; it suits a host node's own controls.
+- **Tiles pane title:** the tab shows the data source's `label` when the gallery has one source ("Motion Clips"), else "Assets"; `grid_title=` or `set_grid_title()` sets it.
+- **Toolbar icons:** `add_toolbar_button(text, callback, tooltip, icon=...)` takes a `QIcon` or `"reload"` (the platform's refresh icon); with an icon, `text` can be `""`.
 - **Top bar:** `add_toolbar_widget(widget, side="left")` places a widget beside the size control, `side="right"` right-aligns it (before any buttons). `add_toolbar_label(text, side="right", framed=True)` adds a selectable label with a border in the theme's colours, e.g. a host node's path. `add_toolbar_button()` still adds buttons on the right.
+
+## 10. UI state
+
+`ui_state()` returns what the user set up, as plain JSON-able data: the search text, the selected category, the collapsed panes, the tile size and the pane sizes. `set_ui_state(state)` puts it back (a dict or its JSON); `ui_state=` does the same at construction. A category that isn't loaded yet is selected once its items arrive.
+
+```python
+g = GalleryWidget(drawer=True, ui_state=node.parm("gallery_ui_state").eval())
+g.uiStateChanged.connect(lambda state: store(json.dumps(state)))
+g.save_ui_state("/tmp/gallery.json"); g.load_ui_state("/tmp/gallery.json")
+```
+
+`uiStateChanged` is debounced (0.4 s) and only fires for real changes made by the user: restoring a state doesn't fire it, and pane sizes count only when a splitter is dragged (not when the window or layout resizes them). Keys missing from a state are left as they are, so a host can store only part of it.
+
+`set_drawer_current(key)` marks one drawer entry as current (bold, on a tint of the theme's accent), e.g. a host node's current clip; `None` clears it.
+
+## 11. Display names
+
+`name_format` (constructor or `set_name_format()`) changes how items are *shown*, not what they are: search and drawer keys keep the full name, and every tooltip starts with it. It's a function `GalleryItem -> NameParts | (title, subtitle, chip) | str | None` that can read anything the record carries; `None` (or an error) shows the item as usual. Drawer entries that aren't in the library are passed as a stand-in item with only the name (`stub_item()`).
+
+```python
+from ilp_gallery.ui.names import NameParts, acronym
+
+def clip(item):
+    md = item.metadata
+    action = md.get("type_label")
+    if not action:
+        return None
+    category = item.category
+    moves, variations = md.get("movement_var") or [], md.get("var") or []
+    return NameParts(" · ".join([action, *moves, *variations]), md.get("actor") or "",
+                     chip=acronym(category), wrap=True,
+                     details=[("Category", category), ("Action", action),
+                              ("Movement Variations", ", ".join(moves)), ("Variations", ", ".join(variations))])
+
+GalleryWidget(drawer=True, name_format=clip, subtitles="when_needed", show_paths=False)
+```
+
+- **Tiles:** `title` on the first line; with `wrap=True` what doesn't fit carries on in the second line (split at " · ", then at spaces). Otherwise the second line is `subtitle` (instead of the type label). `chip` is a small coloured tag in the image's top-left corner.
+- **Second line only when needed:** `subtitles="when_needed"` (or `set_subtitles()`) shows the subtitle only when another item in the library has the same title, e.g. two actors' takes of "run · fwd · 001"; on a wrapped title it follows the overflow. `"never"` hides it, `"always"` (default) shows it. The drawer always shows it.
+- **Drawer rows:** the title, then the subtitle in the muted colour on the same line; the chip's colour as a border around the row's thumbnail.
+- **Tooltips and the details panel:** the full name, then the `details` rows (label, value). With details, the panel shows them (followed by the record's own `display` rows) instead of the category breadcrumbs and tags.
+- **Paths:** `show_paths=False` keeps file paths out of the UI: tooltips, the drawer's tooltips ("A newer version is in the library" instead of the new path), the details panel's Location and its "Open folder" button.
+- **Colours:** each chip text always gets the same muted colour; `NameParts(chip_color="#rrggbb")` sets one explicitly. `acronym(word)` makes 3-letter tags: the first letter and the next consonants ("locomotion" → LCM, "combat" → CMB).

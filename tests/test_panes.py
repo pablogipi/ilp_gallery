@@ -255,3 +255,24 @@ def test_size_label_and_media_badges_can_be_hidden(app):
     w = make(app)
     assert not w.size_label.isHidden() and w.delegate.media_badges is True
     w.close()
+
+
+def test_grid_tab_follows_the_source_label(app):
+    from ilp_gallery.core import RecordsSource
+    w = make(app)                                       # RecordsSource: its default label
+    src = w.library.sources[0]
+    assert w.panes["grid"].title() == (src.label or src.name)
+    w.add_source(RecordsSource([], name="more", label="More"), background=False)
+    assert w.panes["grid"].title() == "Assets"         # several sources
+    w.set_grid_title("Motion Clips")
+    assert w.panes["grid"].title() == "Motion Clips"
+    w.close()
+
+
+def test_toolbar_button_icons(app):
+    w = make(app)
+    b = w.add_toolbar_button("", lambda: None, "Reload", icon="reload")
+    assert not b.icon().isNull() and b.text() == ""
+    with pytest.raises(ValueError):
+        w.add_toolbar_button("", lambda: None, icon="spinner")
+    w.close()

@@ -8,6 +8,7 @@ from PySide6.QtCore import QAbstractListModel, QMimeData, QModelIndex, Qt, QUrl
 
 from ..core.item import GalleryItem
 from ..core.library import GalleryLibrary
+from .names import format_name, tooltip_html
 
 ItemRole = Qt.UserRole + 1
 IdRole = Qt.UserRole + 2
@@ -22,6 +23,8 @@ class GalleryModel(QAbstractListModel):
         self._rows: dict[str, int] = {}
         # set by GalleryWidget: items -> QMimeData (merges registered drag handlers)
         self.mime_builder = None
+        self.name_format = None          # set by GalleryWidget (tooltips, see ui/names.py)
+        self.show_paths = True
 
     # -- result set ----------------------------------------------------
     def set_ids(self, ids: list[str]) -> None:
@@ -57,7 +60,11 @@ class GalleryModel(QAbstractListModel):
         if role == IdRole:
             return it.id
         if role == Qt.ToolTipRole:
-            lines = [f"<b>{it.name}</b>", it.path]
+            if self.name_format is not None:
+                parts = format_name(self.name_format, it)
+                if parts.details:
+                    return tooltip_html(it.name, parts, [it.path] if self.show_paths else [])
+            lines = [f"<b>{it.name}</b>"] + ([it.path] if self.show_paths else [])
             if it.categories:
                 lines.append("Categories: " + ", ".join(it.categories))
             if it.tags:
