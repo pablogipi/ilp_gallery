@@ -219,3 +219,39 @@ def test_tabs_keep_their_width_under_a_host_button_stylesheet(app):
     for name in ("tree", "drawer"):
         assert w.panes[name].tab.width() == STRIP
     host.close()
+
+
+def test_tab_colour_is_lifted_off_a_matching_strip():
+    """In Houdini the theme's tile grey can equal the strip's: the tab must still read."""
+    from PySide6.QtGui import QColor
+    from ilp_gallery.ui.collapsible import _Colors, _distance
+    c = _Colors()
+    c.set(QColor("#3a3a3a"), QColor("#3a3a3a"), QColor("#515151"), QColor("#cccccc"),
+          QColor("#999999"), QColor("#3a3a3a"))
+    assert _distance(c.tab, c.strip) >= 18 and _distance(c.hover, c.tab) >= 12
+    c.set(QColor("#2b303b"), QColor("#363c4a"), QColor("#363b47"), QColor("#d9dce3"),
+          QColor("#8a909c"), QColor("#1e2129"))
+    assert c.tab == QColor("#2b303b")                     # enough contrast: left alone
+
+
+def test_second_toolbar_row(app):
+    w = make(app)
+    assert w.row2.isHidden()
+    a = w.add_toolbar_widget(QtWidgets.QComboBox(), row=1)
+    b = w.add_toolbar_widget(QtWidgets.QCheckBox("Retarget Clips"), row=1)
+    spin(app)
+    assert not w.row2.isHidden() and b.x() > a.x()
+    assert abs(a.geometry().center().y() - b.geometry().center().y()) <= 2   # same line
+    assert w.row2.y() > w.search.y() + w.search.height() - 2          # under the search bar
+    with pytest.raises(ValueError):
+        w.add_toolbar_widget(QtWidgets.QLabel(), row=2)
+    w.close()
+
+
+def test_size_label_and_media_badges_can_be_hidden(app):
+    w = make(app, size_label=False, media_badges=False)
+    assert w.size_label.isHidden() and w.delegate.media_badges is False
+    w.close()
+    w = make(app)
+    assert not w.size_label.isHidden() and w.delegate.media_badges is True
+    w.close()

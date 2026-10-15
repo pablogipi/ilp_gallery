@@ -187,6 +187,7 @@ g.set_drawer(load())                                         # silent: no drawer
 - **Running on the drawer:** once an exporter is registered, the drawer shows a run button with the main action's label ("Ingest (12)"). It calls `export_drawer()`, which runs the default exporter, or the one passed in, on the enabled entries in drawer order and skips missing ones.
 - **Preview:** clicking a row shows its library item in the details panel when the panel is open. An outdated entry previews the library's current version.
 - **Removing by drag:** rows dragged out of the drawer onto the gallery are removed.
+- **Context menu actions:** `add_drawer_action(label, callback, single=False)` adds an entry at the top of the rows' context menu; `callback` receives the selected `DrawerEntry` objects in drawer order, and `single=True` offers it only when one row is selected. The built-in entries follow: Update to latest, Enable, Disable, Show in gallery, Remove Item. A callback that raises is logged.
 - `add_to_drawer(items)`, `drawer_entries()` and `drawer_items(enabled_only=False)` (the library items, in drawer order) round out the API.
 
 Tiles dropped anywhere else on the gallery are swallowed, so a host never receives a drop the user made on the gallery itself.
@@ -291,5 +292,6 @@ g.add_toolbar_widget(QLabel(node.path()))   # beside the size control
 ```
 
 - **Pane names:** `"tree"`, `"grid"`, `"details"`, `"drawer"`; the panes are in `g.panes`, the layout in `g.area`. When one pane of the right column collapses the other takes its height; when both do, the column's width goes to the tiles. A collapsed details panel stops the player and isn't updated until it opens again. The drawer's tab shows its count ("Clips: 4"). `show_sidebar` / `show_details` / `drawer` remove a pane completely (no tab).
-- **Tile size:** `tile_size` sets the starting width (90 to 420; 90 is the most compact). `size_control="wheel"` swaps the slider for the SGI thumbwheel (drag it like ivview's Dolly wheel); it takes its colours from any theme.
+- **Tile size:** `tile_size` sets the starting width (90 to 420; 90 is the most compact). `size_control="wheel"` swaps the slider for the SGI thumbwheel (drag it like ivview's Dolly wheel); it takes its colours from any theme. `size_label=False` drops the "Size" label in front of the control, and `media_badges=False` hides the MOV / GIF labels on the tiles.
+- **Second row:** `add_toolbar_widget(widget, row=1)` puts widgets in a row under the search bar, left to right in the order added (`side="right"` right-aligns them). The row stays hidden until something is added; it suits a host node's own controls.
 - **Top bar:** `add_toolbar_widget(widget, side="left")` places a widget beside the size control, `side="right"` right-aligns it (before any buttons). `add_toolbar_label(text, side="right", framed=True)` adds a selectable label with a border in the theme's colours, e.g. a host node's path. `add_toolbar_button()` still adds buttons on the right.

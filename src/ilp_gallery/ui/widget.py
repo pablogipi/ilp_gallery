@@ -147,7 +147,8 @@ class GalleryWidget(QWidget):
                  style: str | None = None, drawer: bool = False, drawer_key: str = "name",
                  drawer_title: str = "Drawer", drawer_path: str = "path",
                  collapsed: Iterable[str] = (), tile_size: int = 170,
-                 size_control: str = "slider", **_ignored) -> None:
+                 size_control: str = "slider", size_label: bool = True,
+                 media_badges: bool = True, **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
         standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
         "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
@@ -157,7 +158,9 @@ class GalleryWidget(QWidget):
         have to) and ``drawer_path`` the field stored as each entry's path.
         ``collapsed``: panes to build collapsed, any of "tree", "grid", "details", "drawer".
         ``tile_size``: starting tile width (90 to 420; 90 is the most compact).
-        ``size_control``: "slider" or "wheel" (an SGI thumbwheel, like ivview's Dolly)."""
+        ``size_control``: "slider" or "wheel" (an SGI thumbwheel, like ivview's Dolly);
+        ``size_label=False`` drops the "Size" label in front of it.
+        ``media_badges=False`` hides the MOV / GIF labels on the tiles."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -213,11 +216,27 @@ class GalleryWidget(QWidget):
         top.setContentsMargins(8, 6, 8, 6)
         top.setSpacing(10)
         top.addWidget(self.search, 3)
-        top.addWidget(QLabel("Size"))
+        self.size_label = QLabel("Size")
+        self.size_label.setVisible(size_label)
+        top.addWidget(self.size_label)
         top.addWidget(self.size_slider)
         top.addLayout(self.toolbar_left)
         top.addStretch(1)
         top.addLayout(self.toolbar)
+        # A second row under the search bar for host controls (add_toolbar_widget(row=1));
+        # hidden until something is added to it.
+        self.row2 = QWidget()
+        row2 = QHBoxLayout(self.row2)
+        row2.setContentsMargins(8, 0, 8, 6)
+        row2.setSpacing(14)
+        self.row2_left = QHBoxLayout()
+        self.row2_left.setSpacing(14)
+        self.row2_right = QHBoxLayout()
+        self.row2_right.setSpacing(14)
+        row2.addLayout(self.row2_left)
+        row2.addStretch(1)
+        row2.addLayout(self.row2_right)
+        self.row2.hide()
 
         # -- panes -------------------------------------------------------
         self.tree = CategoryTree()
@@ -227,6 +246,7 @@ class GalleryWidget(QWidget):
         self.cache.thumbnail_provider = self._source_thumbnail
         self.delegate = TileDelegate(self.cache, self)
         self.delegate.placeholder = default_placeholder()
+        self.delegate.media_badges = media_badges
         self.view = GalleryView(self.delegate)
         self.view.setStyleSheet("")
         self.view.setModel(self.model)
@@ -267,6 +287,7 @@ class GalleryWidget(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addLayout(top)
+        lay.addWidget(self.row2)
         lay.addWidget(self.area, 1)
 
         # -- wiring ------------------------------------------------------
@@ -657,9 +678,20 @@ class GalleryWidget(QWidget):
         if default:
             self._default_action = callback
 
-    def add_toolbar_widget(self, widget: QWidget, stretch: int = 0, side: str = "left") -> QWidget:
+    def add_toolbar_widget(self, widget: QWidget, stretch: int = 0, side: str = "left",
+                           row: int = 0) -> QWidget:
         """Put ``widget`` in the top bar: ``side="left"`` beside the tile size control,
-        ``"right"`` right-aligned (before any toolbar buttons)."""
+        ``"right"`` right-aligned (before any toolbar buttons). ``row=1`` uses a second
+        row under the search bar instead, left to right in the order added (e.g. a
+        host node's own controls)."""
+        if row == 1:
+            if side not in ("left", "right"):
+                raise ValueError(f"side must be 'left' or 'right', not {side!r}")
+            (self.row2_left if side == "left" else self.row2_right).addWidget(widget, stretch)
+            self.row2.show()
+            return widget
+        if row != 0:
+            raise ValueError(f"row must be 0 or 1, not {row!r}")
         if side == "left":
             self.toolbar_left.addWidget(widget, stretch)
         elif side == "right":
@@ -668,6 +700,11 @@ class GalleryWidget(QWidget):
         else:
             raise ValueError(f"side must be 'left' or 'right', not {side!r}")
         return widget
+
+    def add_drawer_action(self, label: str, callback: Callable[[list[DrawerEntry]], None],
+                          single: bool = False) -> None:
+        """An entry at the top of the drawer rows' context menu; see DrawerWidget.add_action."""
+        self.drawer.add_action(label, callback, single)
 
     def add_toolbar_label(self, text: str = "", side: str = "right", framed: bool = True) -> QLabel:
         """A label in the top bar, e.g. the host node's path. ``framed`` draws a border

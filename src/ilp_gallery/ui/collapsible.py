@@ -38,6 +38,21 @@ class _Colors:
     def set(self, tab, hover, border, text, muted, strip) -> None:
         self.tab, self.hover, self.border, self.text, self.muted, self.strip = (
             QColor(tab), QColor(hover), QColor(border), QColor(text), QColor(muted), QColor(strip))
+        # Host themes (Houdini) can give tabs the same grey as the strip behind them,
+        # leaving only an outline: lift the tab towards the text colour until it reads.
+        if _distance(self.tab, self.strip) < 18:
+            self.tab = _mix(self.tab, self.text, 0.12)
+        if _distance(self.hover, self.tab) < 12:
+            self.hover = _mix(self.tab, self.text, 0.12)
+
+
+def _mix(a: QColor, b: QColor, t: float) -> QColor:
+    return QColor(round(a.red() + (b.red() - a.red()) * t), round(a.green() + (b.green() - a.green()) * t),
+                  round(a.blue() + (b.blue() - a.blue()) * t))
+
+
+def _distance(a: QColor, b: QColor) -> int:
+    return abs(a.red() - b.red()) + abs(a.green() - b.green()) + abs(a.blue() - b.blue())
 
 
 def _arrow(p: QPainter, center: QPointF, size: float, direction: str, color: QColor) -> None:
@@ -215,10 +230,11 @@ class VerticalTab(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         hover = self.underMouse() or self.isDown()
-        # rounded towards the window edge, open towards the gallery
-        tab = QRectF(2.5, 0.5, self.width() - 3, self.height() - 1) if self._edge == "left" \
-            else QRectF(0.5, 0.5, self.width() - 3, self.height() - 1)
-        path = _tab_path(tab, 4, "right" if self._edge == "left" else "left")
+        # a closed rounded tab, inset from both sides of the strip (an open side read
+        # as a tab cut in half where the tab and strip colours are close)
+        tab = QRectF(2.5, 0.5, self.width() - 5, self.height() - 1)
+        path = QPainterPath()
+        path.addRoundedRect(tab, 4, 4)
         p.setPen(QPen(c.border, 1))
         p.fillPath(path, c.hover if hover else c.tab)
         p.drawPath(path)

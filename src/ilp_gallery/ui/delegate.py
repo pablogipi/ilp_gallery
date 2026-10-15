@@ -36,6 +36,7 @@ class TileDelegate(QStyledItemDelegate):
         self.placeholder = None                # QIcon for items without a thumbnail
         self.hover_fraction = 0.0
         self.marks: dict[str, tuple[bool, str]] = {}   # item id -> (enabled, drawer state)
+        self.media_badges = True                         # the MOV / GIF corner labels
         self.set_theme(theme.ILP)
 
     def set_theme(self, t: theme.Theme) -> None:
@@ -109,7 +110,7 @@ class TileDelegate(QStyledItemDelegate):
             p.fillRect(QRect(img_rect.left(), img_rect.bottom() - 2,
                              int(img_rect.width() * self.hover_fraction), 3), self._accent)
 
-        badge = BADGE.get(item.motion[1] if moves else item.type)
+        badge = BADGE.get(item.motion[1] if moves else item.type) if self.media_badges else None
         if badge:
             f = QFont(option.font)
             f.setPointSizeF(max(6.5, f.pointSizeF() * 0.75))

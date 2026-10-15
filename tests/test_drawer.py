@@ -197,3 +197,27 @@ def test_rows_dragged_out_onto_the_gallery_are_removed(app, gallery, monkeypatch
     gallery.dropEvent(ev)
     assert ev.isAccepted() and ev.dropAction() == Qt.CopyAction   # Copy: Qt doesn't delete rows too
     assert wait(app, lambda: gallery.drawer.keys() == ["run"])
+
+
+def test_drawer_context_menu_actions(app, gallery):
+    gallery.add_to_drawer(items(gallery, "walk", "run"))
+    got = []
+    gallery.add_drawer_action("Set As Current", lambda es: got.append([e.key for e in es]), single=True)
+    gallery.add_drawer_action("Print", lambda es: got.append(len(es)))
+    gallery.add_drawer_action("Broken", lambda es: 1 / 0)
+    logs = []
+    gallery.logMessage.connect(logs.append)
+
+    labels = lambda m: [a.text() for a in m.actions() if not a.isSeparator()]
+    one = gallery.drawer.context_menu(["run"])
+    assert labels(one)[:3] == ["Set As Current", "Print", "Broken"] and "Remove Item" in labels(one)
+    two = gallery.drawer.context_menu(["run", "walk"])
+    assert "Set As Current" not in labels(two) and "Remove Items (2)" in labels(two)
+
+    next(a for a in one.actions() if a.text() == "Set As Current").trigger()
+    next(a for a in two.actions() if a.text() == "Print").trigger()
+    next(a for a in two.actions() if a.text() == "Broken").trigger()
+    assert got == [["run"], 2] and any("Drawer action failed" in m for m in logs)
+    next(a for a in two.actions() if a.text().startswith("Remove Items")).trigger()
+    assert gallery.drawer.keys() == []
+    assert gallery.drawer.context_menu([]) is None

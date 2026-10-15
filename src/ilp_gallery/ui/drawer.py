@@ -181,6 +181,7 @@ class DrawerWidget(QWidget):
         self.key = key
         self.path_key = path_key
         self.entry_factory: Callable[[GalleryItem], DrawerEntry | None] | None = None
+        self._actions: list[tuple[str, Callable, bool]] = []   # add_action()
         self.resolver: Callable[[str], GalleryItem | None] = lambda k: None
         self.by_id: Callable[[str], GalleryItem | None] = lambda i: None
         self.icon_for: Callable[[GalleryItem], QIcon | None] = lambda it: None
@@ -445,16 +446,26 @@ class DrawerWidget(QWidget):
         if item is not None:
             self.showRequested.emit(item)
 
-    def _context_menu(self, pos) -> None:
-        li = self.list.itemAt(pos)
-        if li is not None and not li.isSelected():
-            self.list.clearSelection()
-            li.setSelected(True)
-        keys = self._selected_keys()
+    def add_action(self, label: str, callback: Callable[[list[DrawerEntry]], None],
+                   single: bool = False) -> None:
+        """An entry at the top of the rows' context menu. ``callback`` receives the
+        selected entries, in drawer order. ``single=True``: only offered when exactly
+        one row is selected (e.g. "Set As Current")."""
+        self._actions.append((label, callback, single))
+
+    def context_menu(self, keys: list[str]) -> QMenu | None:
+        """The context menu for the rows with ``keys`` (None if there are none)."""
+        keys = [k for k in self.keys() if k in set(keys)]
         if not keys:
-            return
+            return None
         entries = [e for e in self._entries if e.key in set(keys)]
         menu = QMenu(self)
+        for label, callback, single in self._actions:
+            if single and len(entries) != 1:
+                continue
+            menu.addAction(label, lambda cb=callback: self._run_action(cb, entries))
+        if menu.actions():
+            menu.addSeparator()
         outdated = [e.key for e in entries if self.state(e) == STATE_OUTDATED]
         if outdated:
             menu.addAction(f"Update to latest ({len(outdated)})", lambda: self.update_to_latest(outdated))
@@ -463,5 +474,21 @@ class DrawerWidget(QWidget):
         if len(keys) == 1 and self.resolver(keys[0]) is not None:
             menu.addAction("Show in gallery", lambda: self.showRequested.emit(self.resolver(keys[0])))
         menu.addSeparator()
-        menu.addAction(f"Remove ({len(keys)})" if len(keys) > 1 else "Remove", self.remove_selected)
-        menu.exec(self.list.viewport().mapToGlobal(pos))
+        menu.addAction(f"Remove Items ({len(keys)})" if len(keys) > 1 else "Remove Item",
+                       lambda: self.remove_keys(keys))
+        return menu
+
+    def _run_action(self, callback, entries: list[DrawerEntry]) -> None:
+        try:
+            callback(list(entries))
+        except Exception as exc:  # a broken host action must not break the drawer
+            self.logMessage.emit(f"Drawer action failed: {exc}")
+
+    def _context_menu(self, pos) -> None:
+        li = self.list.itemAt(pos)
+        if li is not None and not li.isSelected():
+            self.list.clearSelection()
+            li.setSelected(True)
+        menu = self.context_menu(self._selected_keys())
+        if menu is not None:
+            menu.exec(self.list.viewport().mapToGlobal(pos))
