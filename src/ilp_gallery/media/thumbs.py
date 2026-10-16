@@ -33,13 +33,20 @@ SCRUB_FRAMES = 12      # frames sampled per movie / gif for hover scrub
 _DONE = "done"
 
 
-def _cache_key(path: str, width: int, frames: int) -> str | None:
+def _file_sig(path: str) -> str:
+    """path|mtime|size, or "" when the file isn't there."""
     try:
         st = os.stat(path)
     except OSError:
+        return ""
+    return f"{path}|{st.st_mtime_ns}|{st.st_size}"
+
+
+def _cache_key(path: str, width: int, frames: int, extra: str = "") -> str | None:
+    sig = _file_sig(path)
+    if not sig:
         return None
-    raw = f"{path}|{st.st_mtime_ns}|{st.st_size}|{width}|{frames}"
-    return hashlib.sha1(raw.encode()).hexdigest()
+    return hashlib.sha1(f"{sig}|{width}|{frames}|{extra}".encode()).hexdigest()
 
 
 def _read_scaled(path: str, width: int) -> QImage:
@@ -124,7 +131,12 @@ def generate(item: GalleryItem, cache_dir: str, width: int = THUMB_WIDTH,
         elif not (item.thumbnail and os.path.exists(item.thumbnail)):
             item = dataclasses.replace(item, thumbnail=item.preview)
     n = frames if item.is_animated else 1
-    key = _cache_key(item.path, width, n)
+    # The thumbnail's own path, date and size are part of the key: a thumbnail
+    # rewritten in place makes a new entry instead of reusing the old frames.
+    thumb_sig = _file_sig(item.thumbnail) if item.thumbnail else ""
+    key = _cache_key(item.path, width, n, thumb_sig)
+    if key is None and thumb_sig:
+        key = _cache_key(item.thumbnail, width, 1)      # the file itself isn't here: its thumbnail is
     if key is None:
         return []
     out = os.path.join(cache_dir, key[:2], key)
@@ -161,8 +173,22 @@ def generate(item: GalleryItem, cache_dir: str, width: int = THUMB_WIDTH,
     return files
 
 
+def media_refs(item: GalleryItem) -> tuple[str, ...]:
+    """The files an item's thumbnail and scrub frames come from."""
+    refs = [item.thumbnail or "", item.preview]
+    if item.is_animated or not refs[0]:
+        refs.append(item.path)
+    return tuple(r for r in refs if r)
+
+
+def media_signature(refs) -> list[str]:
+    """For each media file: path|mtime|size, or the bare path when it's missing."""
+    return [_file_sig(p) or p for p in refs]
+
+
 class _Signals(QObject):
-    finished = Signal(str, list)  # item_id, frame paths
+    finished = Signal(str, list, list)  # item_id, frame paths, media signature
+    checked = Signal(list)              # ids whose media changed on disk (_StatJob)
 
 
 class _Job(QRunnable):
@@ -180,7 +206,27 @@ class _Job(QRunnable):
         except Exception:  # never let a bad file kill a pool thread
             log.exception("Thumbnail failed for %s", self.item.path)
             files = []
-        self.signals.finished.emit(self.item.id, files)
+        self.signals.finished.emit(self.item.id, files, media_signature(media_refs(self.item)))
+
+
+class _StatJob(QRunnable):
+    """Re-check media files on disk (off the GUI thread: a share can be slow)."""
+
+    def __init__(self, known: dict[str, tuple[tuple[str, ...], list[str]]], signals: _Signals) -> None:
+        super().__init__()
+        self.known = known
+        self.signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        changed = []
+        try:
+            for iid, (refs, sig) in self.known.items():
+                if media_signature(refs) != sig:
+                    changed.append(iid)
+        except Exception:
+            log.exception("checking media failed")
+        self.signals.checked.emit(changed)
 
 
 class _LRU(OrderedDict):
@@ -214,6 +260,7 @@ class ThumbnailCache(QObject):
     """Owns the worker pool and in-memory LRUs. One per gallery widget (or shared)."""
 
     thumbnailReady = Signal(str)  # item_id
+    mediaChanged = Signal(list)   # ids reset by refresh_media's background check
 
     def __init__(self, cache_dir: str = DEFAULT_CACHE, threads: int | None = None,
                  memory_mb: int = 256, parent: QObject | None = None) -> None:
@@ -223,11 +270,16 @@ class ThumbnailCache(QObject):
         self.pool.setMaxThreadCount(threads or max(2, min(6, (os.cpu_count() or 4) // 2)))
         self._signals = _Signals()
         self._signals.finished.connect(self._on_finished)
+        self._signals.checked.connect(self._on_checked)
+        self._checking = False                   # a _StatJob is running
+        self._check_again = False
         self._posters = _LRU(memory_mb * 1024 * 1024, _pix_bytes)
         self._scrub = _LRU(24)                   # items with scrub frames in memory
         self._paths: dict[str, list[str]] = {}   # item_id -> frame files on disk
         self._pending: set[str] = set()
         self._failed: set[str] = set()
+        self._refs: dict[str, tuple[str, ...]] = {}     # item_id -> media files it was made from
+        self._sigs: dict[str, list[str]] = {}          # item_id -> those files' path|mtime|size
         self._prio = itertools.count()
         #: optional callable(item) -> bytes | path | None (the item's DataSource.thumbnail)
         self.thumbnail_provider = None
@@ -267,6 +319,7 @@ class ThumbnailCache(QObject):
         if item.id in self._pending or item.id in self._failed or item.id in self._paths:
             return
         self._pending.add(item.id)
+        self._refs[item.id] = media_refs(item)
         # Newer requests get higher priority: what the user is looking at *now* comes first.
         self.pool.start(_Job(item, self.cache_dir, self._signals, self.thumbnail_provider),
                         next(self._prio) % 2**30)
@@ -276,6 +329,49 @@ class ThumbnailCache(QObject):
         self.pool.clear()
         self._pending.clear()
 
+    def refresh_media(self, items) -> set[str]:
+        """After the items were reloaded: forget the thumbnails of items whose media
+        changed, so they're made again the next time they're shown.
+
+        Items whose media *files* changed (a new version) are reset at once and
+        returned. Then a background check looks at the files on disk for every item
+        with a thumbnail: missing media that has appeared (a preview the farm hadn't
+        rendered yet) or a file rewritten in place (new date or size) resets the item
+        too, and those ids arrive through ``mediaChanged``."""
+        reset = set()
+        for item in items:
+            iid = item.id
+            if iid in self._pending or iid not in self._refs:
+                continue
+            if media_refs(item) != self._refs[iid]:
+                reset.add(iid)
+        for iid in reset:
+            self.invalidate(iid, remove_from_disk=False)
+        self._start_check()
+        return reset
+
+    def _start_check(self) -> None:
+        if self._checking:
+            self._check_again = True             # the files may have changed since it started
+            return
+        known = {i: (self._refs[i], list(self._sigs[i])) for i in self._sigs
+                 if i in self._refs and i not in self._pending}
+        if not known:
+            return
+        self._checking = True
+        self.pool.start(_StatJob(known, self._signals), 2**30)   # ahead of thumbnails
+
+    def _on_checked(self, changed: list) -> None:
+        self._checking = False
+        changed = [i for i in changed if i in self._sigs]          # not reset meanwhile
+        for iid in changed:
+            self.invalidate(iid, remove_from_disk=False)
+        if changed:
+            self.mediaChanged.emit(changed)
+        if self._check_again:
+            self._check_again = False
+            self._start_check()
+
     def invalidate(self, item_id: str, remove_from_disk: bool = True) -> None:
         files = self._paths.pop(item_id, None)
         if remove_from_disk and files:
@@ -284,14 +380,18 @@ class ThumbnailCache(QObject):
         self._posters.pop(item_id, None)
         self._scrub.pop(item_id, None)
         self._failed.discard(item_id)
+        self._refs.pop(item_id, None)
+        self._sigs.pop(item_id, None)
 
     def shutdown(self) -> None:
         self.pool.clear()
         self.pool.waitForDone(2000)
 
     # -- internal ------------------------------------------------------
-    def _on_finished(self, item_id: str, files: list) -> None:
+    def _on_finished(self, item_id: str, files: list, signature: list) -> None:
         self._pending.discard(item_id)
+        if item_id in self._refs:                # not invalidated while it was running
+            self._sigs[item_id] = signature
         if files:
             self._paths[item_id] = files
         else:

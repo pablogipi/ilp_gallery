@@ -336,6 +336,7 @@ class GalleryWidget(QWidget):
         self.details.categoryClicked.connect(self.tree.select_path)
         self.details.tagClicked.connect(lambda t: self.search.toggle_token(f"tag:{quote_value(t)}"))
         self.cache.thumbnailReady.connect(self._on_thumb_ready)
+        self.cache.mediaChanged.connect(self._on_media_changed)
         self.drawer.resolver = self._drawer_index.get
         self.drawer.by_id = self.library.get
         self._drawer_placeholder_icon = None
@@ -1108,9 +1109,22 @@ class GalleryWidget(QWidget):
         self._run_query(self.search.text())
         if getattr(self, "_pending_category", None) is not None:
             self._apply_pending_category()
-        self._refresh_details()
+        # Media published after the data (or a new version's media): make them again.
+        reset = self.cache.refresh_media(self.library)
+        if reset:
+            self.view.viewport().update()
+            if hasattr(self, "drawer"):
+                self.drawer.refresh_icons()
+        self._refresh_details(reset)
 
-    def _refresh_details(self) -> None:
+    def _on_media_changed(self, ids: list) -> None:
+        """Media found changed on disk after a reload: show the new thumbnails."""
+        self.view.viewport().update()
+        if self.has_drawer():
+            self.drawer.refresh_icons()
+        self._refresh_details(set(ids))
+
+    def _refresh_details(self, media_reset: set[str] = frozenset()) -> None:
         """After the library changed (a reload, a poll): the details panel shows the
         item it had, as it is now, e.g. a new version's rows. Unchanged items are left
         alone so a playing preview isn't restarted; a removed one clears the panel."""
@@ -1120,7 +1134,7 @@ class GalleryWidget(QWidget):
         current = self.library.get(shown.id)
         if current is None:
             self.details.set_item(None)
-        elif current != shown:
+        elif current != shown or current.id in media_reset:
             self.details.set_item(current)
     def _update_drawer_index(self) -> None:
         if not self.has_drawer():

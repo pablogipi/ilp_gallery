@@ -284,3 +284,43 @@ def test_no_assigned_category_without_a_drawer(app):
     w = GalleryWidget(drawer=True, drawer_category=None)
     assert GalleryWidget.DRAWER_PATH not in w.tree._rows
     w.close()
+
+
+def test_media_published_after_the_data_is_picked_up(app, tmp_path):
+    """A clip whose thumbnail / preview didn't exist yet gets them on the next reload,
+    even when its record didn't change; a new version's media replaces the old one."""
+    from PySide6.QtGui import QImage, QColor
+    from ilp_gallery.media.thumbs import ThumbnailCache
+    from ilp_gallery.ui.widget import GalleryWidget
+    thumb = tmp_path / "walk_thumb.png"
+    recs = [make_record(str(tmp_path / "walk.fbx"), id="walk", name="walk", thumbnail=str(thumb))]
+    cache = ThumbnailCache(cache_dir=str(tmp_path / "cache"))
+    w = GalleryWidget(cache=cache, drawer=True)
+    src = RecordsSource(lambda: list(recs), name="clips")
+    w.add_source(src, background=False)
+    w.show()
+    w.set_drawer([("walk", recs[0]["path"])])
+    assert wait(app, lambda: cache.failed("walk"))                   # no media yet
+    img = QImage(64, 36, QImage.Format_RGB888)
+    img.fill(QColor("red"))
+    img.save(str(thumb))                                              # the render farm delivers
+    w.reload_source(src, background=False)                            # same record
+    assert wait(app, lambda: not cache.failed("walk") and w.cache.poster(w.library.get("walk")) is not None)
+    assert wait(app, lambda: w.drawer.list.item(0).icon().cacheKey() != w._drawer_placeholder().cacheKey())
+
+    thumb2 = tmp_path / "walk_v2.png"
+    img.fill(QColor("blue"))
+    img.save(str(thumb2))
+    recs[0] = make_record(str(tmp_path / "walk.fbx"), id="walk", name="walk", thumbnail=str(thumb2))
+    w.reload_source(src, background=False)                            # a new version
+    assert wait(app, lambda: (p := cache.poster(w.library.get("walk"))) is not None
+                and p.toImage().pixelColor(5, 5).blue() > 200)
+
+    img.fill(QColor("lime"))
+    img.save(str(thumb2))                                             # rewritten in place
+    os.utime(thumb2, ns=(time.time_ns() + 5_000_000_000,) * 2)        # a clearly newer date
+    w.reload_source(src, background=False)
+    assert wait(app, lambda: (p := cache.poster(w.library.get("walk"))) is not None
+                and p.toImage().pixelColor(5, 5).green() > 200)
+    w.close()
+    cache.shutdown()
