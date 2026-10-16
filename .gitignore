@@ -1,4 +1,14 @@
-src/megascans.json
+*.*~
+*.pyc
+*.py~
+*.bak
+tags
+build/
+.idea
+sesson.vim
+backup
+tags
+*.vscode
+*.code-workspace
 *.patch
-session.vim
-lock
+megascans.json
