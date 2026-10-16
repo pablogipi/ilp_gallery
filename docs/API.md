@@ -343,6 +343,7 @@ GalleryWidget(drawer=True, name_format=clip, subtitles="when_needed", show_paths
 - **Second line only when needed:** `subtitles="when_needed"` (or `set_subtitles()`) shows the subtitle only when another item in the library has the same title, e.g. two actors' takes of "run · fwd · 001"; on a wrapped title it follows the overflow. `"never"` hides it, `"always"` (default) shows it. The drawer always shows it.
 - **Drawer rows:** the title, then the subtitle in the muted colour on the same line; the chip's colour as a border around the row's thumbnail.
 - **Tooltips and the details panel:** the full name, then the `details` rows (label, value). With details, the panel shows them (followed by the record's own `display` rows) instead of the category breadcrumbs and tags.
+- **Preview title:** when the format returns `details`, the details panel shows the short `title` as its heading; the full name is its tooltip.
 - **Paths:** `show_paths=False` keeps file paths out of the UI: tooltips, the drawer's tooltips ("A newer version is in the library" instead of the new path), the details panel's Location and its "Open folder" button.
 - **Colours:** each chip text always gets the same muted colour; `NameParts(chip_color="#rrggbb")` sets one explicitly. `acronym(word)` makes 3-letter tags: the first letter and the next consonants ("locomotion" → LCM, "combat" → CMB).
 
@@ -383,3 +384,5 @@ bind_state(gallery, "motion_clips_panel")          # after sources and options a
 `GalleryWidget(log=True)` adds a **Log** pane along the bottom, full width: every `logMessage` (loads, polls, exporter output, errors with their traceback indented underneath) with a time stamp, a **Clear** button, and **Stop** while a stoppable task (a threaded export) runs. It collapses downward to a tab in a strip along the bottom (`collapsed=("log",)` builds it folded; the state is saved like the other panes); while folded, its tab counts new messages ("Log (3)"). `logMessage` still fires as before, so a host can send the same messages elsewhere too, e.g. Houdini's status bar.
 
 `PaneArea.add_pane(..., where="bottom")` is the generic slot it uses: full-width panes under the rest, folding to tabs in the bottom strip.
+
+**Copy path / Copy command.** The details panel's copy button, next to the main action, copies the item's path ("Copy path"), or its export command when a command template is set in Settings ("Copy command"); the label follows `command_template`.

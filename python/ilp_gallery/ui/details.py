@@ -65,7 +65,7 @@ class DetailPanel(QWidget):
         self.more_btn.setStyleSheet("padding: 5px 0px;")
         self.more_btn.setToolTip("Other exporters")
         self.more_btn.setVisible(False)
-        self.copy_btn = QPushButton("Copy command")
+        self.copy_btn = QPushButton("Copy path")       # "Copy command" with a command template
         self.folder_btn = QPushButton("Open folder")
         self.preview_btn = QPushButton("Preview")
         self.preview_btn.setToolTip("Open the preview movie with the preview command")
@@ -81,6 +81,7 @@ class DetailPanel(QWidget):
         export_group.addWidget(self.export_btn)
         export_group.addWidget(self.more_btn)
         buttons.addLayout(export_group)
+        buttons.addWidget(self.copy_btn)                # beside the main action
         for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn, self.preview_btn):
             b.setCursor(Qt.PointingHandCursor)
         buttons.addWidget(self.preview_btn)
@@ -88,7 +89,6 @@ class DetailPanel(QWidget):
         # utilities on a second row, so the panel stays narrow
         tools = QHBoxLayout()
         tools.setSpacing(6)
-        tools.addWidget(self.copy_btn)
         tools.addWidget(self.folder_btn)
         tools.addStretch(1)
 
@@ -178,8 +178,15 @@ class DetailPanel(QWidget):
             self.info.setText("")
             return
         self.title.setStyleSheet("")
-        # let long names_like__this wrap at their separators (zero-width spaces)
-        self.title.setText(item.name.replace("__", "__\u200b").replace("/", "/\u200b"))
+        parts = format_name(self.name_format, item)
+        if parts.details:
+            # the host's short title; the full name is in the rows' tooltip and copyable
+            self.title.setText(parts.title)
+            self.title.setToolTip(item.name)
+        else:
+            # let long names_like__this wrap at their separators (zero-width spaces)
+            self.title.setText(item.name.replace("__", "__\u200b").replace("/", "/\u200b"))
+            self.title.setToolTip("")
         self.folder_btn.setVisible(self.show_paths)
         if format_name(self.name_format, item).details:
             self.sub.setText("")                         # the detail rows say it all
@@ -189,8 +196,13 @@ class DetailPanel(QWidget):
         self.sub.setVisible(bool(self.sub.text()))
         self.info.setText(self._html(item))
 
+    def set_copy_label(self, label: str, tooltip: str) -> None:
+        self.copy_btn.setText(label)
+        self.copy_btn.setToolTip(tooltip)
+
     def set_theme(self, t: theme.Theme) -> None:
         self._theme = t
+        self.player.set_icon_color(t.c("text"))
         self.player.canvas.background = t.c("image_bg")
         self.player.canvas.update()
         if self.item is not None:

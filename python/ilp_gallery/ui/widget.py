@@ -202,7 +202,7 @@ class GalleryWidget(QWidget):
         else:
             self.library = library or GalleryLibrary()
             self.cache = cache or ThumbnailCache(parent=self)
-        self.command_template = ""
+        self._command_template = ""
         self._actions: list[tuple[str, ItemsCallback]] = []
         self._exporters: list[Exporter] = []
         self._default_exporter: Exporter | None = None
@@ -353,6 +353,7 @@ class GalleryWidget(QWidget):
         self.details.exportRequested.connect(lambda items: self.export(items))
         self.details.exportMenuRequested.connect(self._export_menu)
         self.details.copyCommandRequested.connect(self.copy_command)
+        self._update_copy_button()
         self.details.previewRequested.connect(self.preview)
         self.details.openFolderRequested.connect(lambda it: _open(_folder(it)))
         self.details.categoryClicked.connect(self.tree.select_path)
@@ -1017,15 +1018,36 @@ class GalleryWidget(QWidget):
             QGuiApplication.clipboard().setText("\n".join(paths))
 
     def copy_command(self, items: list[GalleryItem] | None = None) -> str:
+        """Copy the export command of ``items`` (one per line) or, with no command
+        template, their paths. Returns the text copied."""
         items = items or self.selected_items()
         if not items:
             return ""
         if self.command_template:
             text = "\n".join(format_command(self.command_template, it) for it in items)
         else:
-            text = "\n".join(_folder(it) for it in items)
+            text = "\n".join(it.path for it in items)
         QGuiApplication.clipboard().setText(text)
+        self.logMessage.emit(f"Copied {'the command' if self.command_template else 'the path'}"
+                             f"{'s' if len(items) > 1 else ''} of {len(items)} item(s)")
         return text
+
+    @property
+    def command_template(self) -> str:
+        """The Settings "Export command"; also decides what the Copy button copies."""
+        return self._command_template
+
+    @command_template.setter
+    def command_template(self, value: str) -> None:
+        self._command_template = value or ""
+        if hasattr(self, "details"):
+            self._update_copy_button()
+
+    def _update_copy_button(self) -> None:
+        if self.command_template:
+            self.details.set_copy_label("Copy command", "Copy the export command for this item")
+        else:
+            self.details.set_copy_label("Copy path", "Copy this item's path to the clipboard")
 
     # -- internals -------------------------------------------------------
     _default_action: ItemsCallback | None = None

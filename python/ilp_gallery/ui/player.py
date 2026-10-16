@@ -13,8 +13,10 @@ import subprocess
 import threading
 from collections import deque
 
-from PySide6.QtCore import QObject, QRect, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QImage, QImageReader, QKeySequence, QMovie, QPainter, QPixmap, QShortcut
+from PySide6.QtCore import QObject, QPointF, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import (
+    QColor, QIcon, QImage, QImageReader, QKeySequence, QMovie, QPainter, QPixmap, QPolygonF, QShortcut,
+)
 from PySide6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QSlider, QToolButton, QVBoxLayout, QWidget,
 )
@@ -155,8 +157,16 @@ class PlayerWidget(QWidget):
         self._playing = False
 
         self.canvas = _Canvas(self)
-        self.play_btn = QToolButton(text="▶", autoRaise=True)
-        self.play_btn.setFixedWidth(32)
+        # Painted icons, not "▶" text: host stylesheets (Houdini) frame text buttons
+        # and fonts draw the glyph at very different sizes.
+        self.play_btn = QToolButton(autoRaise=True)
+        self.play_btn.setObjectName("playButton")
+        self.play_btn.setFixedSize(30, 26)
+        self.play_btn.setIconSize(QSize(20, 20))
+        self.play_btn.setStyleSheet("QToolButton#playButton { border: none; background: transparent; padding: 0; }"
+                                    "QToolButton#playButton:hover { background: rgba(127,127,127,60);"
+                                    " border-radius: 4px; }")
+        self.set_icon_color(QColor("#d9dce3"))
         self.slider = QSlider(Qt.Horizontal)
         self.frame_lbl = QLabel("")
         self.frame_lbl.setMinimumWidth(90)
@@ -251,14 +261,27 @@ class PlayerWidget(QWidget):
         else:
             return
         self._playing = True
-        self.play_btn.setText("❚❚")
+        self.play_btn.setIcon(self._icons["pause"])
+        self.play_btn.setToolTip("Pause (Space)")
 
     def pause(self) -> None:
         self._playing = False
-        self.play_btn.setText("▶")
+        self._show_play()
         if self._movie:
-            self._movie.setPaused(True)
+            try:
+                self._movie.setPaused(True)
+            except RuntimeError:          # already deleted (the app is shutting down)
+                self._movie = None
         self._timer.stop()
+
+    def set_icon_color(self, color: QColor) -> None:
+        """Play / pause icons in ``color`` (the theme's text colour)."""
+        self._icons = {kind: _media_icon(kind, QColor(color)) for kind in ("play", "pause")}
+        self.play_btn.setIcon(self._icons["pause" if getattr(self, "_playing", False) else "play"])
+
+    def _show_play(self) -> None:
+        self.play_btn.setIcon(self._icons["play"])
+        self.play_btn.setToolTip("Play (Space)")
 
     def toggle(self) -> None:
         self.pause() if self._playing else self.play()
@@ -266,7 +289,7 @@ class PlayerWidget(QWidget):
     def stop(self) -> None:
         self._timer.stop()
         self._playing = False
-        self.play_btn.setText("▶")
+        self._show_play()
         if self._stream:
             self._stream.stop()
             self._stream = None
@@ -406,3 +429,23 @@ class PlayerWidget(QWidget):
     def hideEvent(self, e) -> None:
         self.pause()
         super().hideEvent(e)
+
+
+def _media_icon(kind: str, color: QColor, size: int = 28) -> QIcon:
+    """A crisp play triangle or pause bars, drawn at 2x for high-DPI screens."""
+    pix = QPixmap(size * 2, size * 2)
+    pix.fill(Qt.transparent)
+    pix.setDevicePixelRatio(2.0)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(color)
+    s = float(size)
+    if kind == "play":
+        p.drawPolygon(QPolygonF([QPointF(s * 0.30, s * 0.20), QPointF(s * 0.30, s * 0.80),
+                                 QPointF(s * 0.80, s * 0.50)]))
+    else:
+        for x in (0.28, 0.56):
+            p.drawRoundedRect(QRectF(s * x, s * 0.22, s * 0.16, s * 0.56), 1.5, 1.5)
+    p.end()
+    return QIcon(pix)

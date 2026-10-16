@@ -114,7 +114,8 @@ def test_tiles_drawer_tooltips_and_details(app):
     w.select("locomotion__run__fwd__001__genman")
     spin(app)
     d = w.details
-    assert d.title.text().replace("\u200b", "") == "locomotion__run__fwd__001__genman"
+    assert d.title.text() == "run · fwd · 001"                       # the short title
+    assert d.title.toolTip() == "locomotion__run__fwd__001__genman"  # the full name on hover
     assert not d.sub.isVisibleTo(d)
     info = d.info.text()
     assert "Category" in info and "Actor" in info and "Location" not in info and "/pub/" not in info

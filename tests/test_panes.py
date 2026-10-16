@@ -309,3 +309,20 @@ def test_no_log_pane_by_default(app):
     w.logMessage.emit("x")
     assert w.log_pane.text() == ""
     w.close()
+
+
+def test_preview_buttons_and_copy_path(app):
+    from PySide6.QtGui import QGuiApplication
+    w = make(app)
+    d = w.details
+    assert d.copy_btn.text() == "Copy path"
+    assert d.copy_btn.parentWidget() is d.export_btn.parentWidget()
+    assert abs(d.copy_btn.geometry().center().y() - d.export_btn.geometry().center().y()) <= 2
+    item = w.library.get(w.model.ids()[0])
+    assert w.copy_command([item]) == item.path == QGuiApplication.clipboard().text()
+    w.command_template = "echo {path}"
+    assert d.copy_btn.text() == "Copy command"
+    assert w.copy_command([item]) == f"echo {item.path}"
+    p = w.details.player
+    assert p.play_btn.text() == "" and not p.play_btn.icon().isNull()
+    w.close()
