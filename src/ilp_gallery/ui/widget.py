@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections import Counter
 import json
 import logging
+import weakref
 import os
 import shlex
 import subprocess
@@ -47,6 +48,7 @@ from . import theme as theme_mod
 from .delegate import TileDelegate
 from .collapsible import CollapsiblePane, PaneArea
 from .details import DetailPanel
+from . import shared as shared_mod
 from .names import format_name
 from .drawer import MIME_DRAWER, DrawerEntry, DrawerWidget, build_key_index, entry_state
 from .model import GalleryModel, ItemRole
@@ -155,6 +157,7 @@ class GalleryWidget(QWidget):
                  name_format: "Callable[[str], object] | None" = None,
                  subtitles: str = "always", show_paths: bool = True,
                  grid_title: str | None = None, drawer_category: str | None = "Assigned",
+                 shared: str | None = None,
                  **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
         standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
@@ -178,7 +181,9 @@ class GalleryWidget(QWidget):
         ``grid_title``: the tiles pane's tab; default: the data source's ``label`` when
         there's one source, else "Assets".
         ``drawer_category``: label of a pinned category listing the drawer's items
-        ("Assigned"); None: no such category."""
+        ("Assigned"); None: no such category.
+        ``shared``: a key; galleries with the same key share one library, its data
+        sources and the thumbnail cache, loaded once (see ilp_gallery.ui.shared)."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -187,8 +192,13 @@ class GalleryWidget(QWidget):
             self.setObjectName("ILPGalleryRoot")
         self._theme_spec = (theme, style)
         self.theme = theme_mod.resolve(theme, style)
-        self.library = library or GalleryLibrary()
-        self.cache = cache or ThumbnailCache(parent=self)
+        self._shared = shared_mod.shared(shared) if shared else None
+        if self._shared is not None:
+            self.library = self._shared.library
+            self.cache = self._shared.cache
+        else:
+            self.library = library or GalleryLibrary()
+            self.cache = cache or ThumbnailCache(parent=self)
         self.command_template = ""
         self._actions: list[tuple[str, ItemsCallback]] = []
         self._exporters: list[Exporter] = []
@@ -349,7 +359,8 @@ class GalleryWidget(QWidget):
         self.drawer.logMessage.connect(self.logMessage)
         self.setAcceptDrops(True)   # swallow our own drags (see dragEnterEvent)
         self._libraryChanged.connect(lambda: self._library_dirty.start())
-        self.library.add_listener(self._on_library_changed)
+        self._listener = shared_mod.WeakListener(self.library, self)
+        self.library.add_listener(self._listener)
         self._poll_timer = QTimer(self, interval=1000)
         self._poll_timer.timeout.connect(self._poll_sources)
         self._poll_timer.start()
@@ -432,12 +443,25 @@ class GalleryWidget(QWidget):
         self.refresh_theme()  # e.g. the host's scheme changed while the pane was hidden
 
     # ---------------------------------------------------------------- data
-    def add_source(self, source: DataSource, background: bool = True) -> None:
+    def add_source(self, source: DataSource, background: bool = True) -> DataSource:
         """Add a data source. With ``background`` the (possibly slow) load runs off the GUI thread;
-        ``sourceLoaded`` / ``sourceFailed`` report the outcome."""
+        ``sourceLoaded`` / ``sourceFailed`` report the outcome.
+
+        Returns the source in use: in a shared gallery, a source with the same name
+        that another gallery already added is reused as it is (no second load)."""
+        if self._shared is not None:
+            existing = self.library.source(source.name)
+            if existing is not None:
+                self._update_grid_title()
+                if existing.name not in self._shared.loaded:    # registered, never loaded
+                    self._shared.loaded.add(existing.name)
+                    self._reload(existing, background)
+                return existing
+            self._shared.loaded.add(source.name)
         self.library.register_source(source)
         self._update_grid_title()
         self._reload(source, background)
+        return source
 
     def set_grid_title(self, title: str | None) -> None:
         """The tiles pane's tab text; None: from the data sources (see ``grid_title``)."""
@@ -511,6 +535,12 @@ class GalleryWidget(QWidget):
         self.sourceFailed.emit(src, msg)
 
     def _poll_sources(self) -> None:
+        if self._shared is not None:                   # one gallery polls for all of them
+            owner = self._shared.poller() if self._shared.poller is not None else None
+            if owner is None or not shared_mod.alive(owner):
+                self._shared.poller = weakref.ref(self)
+            elif owner is not self:
+                return
         now = time.monotonic()
         for src in self.library.sources:
             iv = getattr(src, "poll_interval", 0) or 0
@@ -1390,7 +1420,9 @@ class GalleryWidget(QWidget):
         if self._task is not None:
             self._task.wait(3000)
         self.details.player.stop()
-        self.library.remove_listener(self._on_library_changed)
+        self.library.remove_listener(self._listener)
+        if self._shared is not None and self._shared.poller is not None and self._shared.poller() is self:
+            self._shared.poller = None                 # another gallery takes over polling
         super().closeEvent(e)
 
 

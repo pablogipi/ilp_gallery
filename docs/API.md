@@ -345,3 +345,18 @@ GalleryWidget(drawer=True, name_format=clip, subtitles="when_needed", show_paths
 - **Tooltips and the details panel:** the full name, then the `details` rows (label, value). With details, the panel shows them (followed by the record's own `display` rows) instead of the category breadcrumbs and tags.
 - **Paths:** `show_paths=False` keeps file paths out of the UI: tooltips, the drawer's tooltips ("A newer version is in the library" instead of the new path), the details panel's Location and its "Open folder" button.
 - **Colours:** each chip text always gets the same muted colour; `NameParts(chip_color="#rrggbb")` sets one explicitly. `acronym(word)` makes 3-letter tags: the first letter and the next consonants ("locomotion" → LCM, "combat" → CMB).
+
+## 12. Shared libraries
+
+Every gallery normally has its own library, data sources and thumbnail cache. In a host where several panels show the same items (a Parameters pane per node editor, floating parameter windows), pass the same `shared` key to all of them:
+
+```python
+gallery = GalleryWidget(shared="motion_clips", drawer=True)
+source = gallery.add_source(MotionClipsSource())    # returns the source actually in use
+```
+
+- **One library, loaded once.** Galleries with the same key use one `GalleryLibrary` (items and search index) and one `ThumbnailCache`, kept for the life of the process. The first gallery loads a source; later ones get the already loaded items at once: `add_source()` reuses the registered source with that name and returns it, so keep the return value (e.g. for a Refresh button).
+- **Changes reach every gallery.** A reload or `poll()` applied by any of them updates all of them: tiles, drawer states, the Assigned category, an open details panel.
+- **One poller.** Only one of the galleries polls the sources; when it closes or its panel is deleted, another takes over.
+- **Per-gallery state stays separate:** search, category, collapsed panes, drawer contents, selection.
+- Listeners are held weakly, so a host deleting a panel without closing it doesn't leave a dead listener behind. `ilp_gallery.ui.shared.drop_shared(key)` forgets a shared library.
