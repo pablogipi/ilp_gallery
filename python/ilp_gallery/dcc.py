@@ -250,8 +250,3 @@ def register_nuke_panel() -> None:
     nukescripts.panels.registerWidgetAsPanel(
         "ilp_gallery.dcc.NukeGalleryPanel", "ILP Gallery", "com.ilpvfx.ILPGallery"
     )
-
-
-def houdini_panel_widget() -> GalleryBrowser:
-    """Entry point for the Houdini Python Panel (see houdini/python_panels)."""
-    return make_browser()

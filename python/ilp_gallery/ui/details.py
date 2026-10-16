@@ -168,6 +168,7 @@ class DetailPanel(QWidget):
         self.empty.setVisible(False)
         for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn, self.preview_btn):
             b.setEnabled(has)
+        self.folder_btn.setVisible(self.show_paths)            # also before anything is selected
         self.player.set_item(item.motion_item() if item is not None else None, autoplay=autoplay)
         self.preview_btn.setVisible(self._preview_on and item is not None and self.can_preview(item))
         if not has:

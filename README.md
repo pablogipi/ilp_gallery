@@ -20,7 +20,7 @@ ilp_gallery.dcc   hosts: show(), show_maya(), Nuke panel, Houdini panel
 ## Quick start
 
 ```bash
-pip install -e ".[standalone,test]"         # or put src/ on PYTHONPATH (rez)
+pip install -e ".[standalone,test]"         # or, with rez: rez-env ilp_gallery (puts python/ on PYTHONPATH)
 python examples/make_demo_library.py /tmp/gallery_demo
 ilp-gallery /tmp/gallery_demo/library.json
 ```
@@ -166,7 +166,7 @@ Set `ILP_GALLERY_LIBRARY` (one or more sources, `:`-separated) so panels open wi
 ```python
 # Houdini: shelf tool / Python shell (full browser window)
 from ilp_gallery import dcc; dcc.show("/path/to/megascans.json")
-#   or a pane tab: put ./houdini on HOUDINI_PATH -> New Pane Tab > ILP Gallery
+#   pane tabs: build them in your tool's own .pypanel with GalleryWidget (see docs/API.md)
 
 # Maya: dockable workspace control
 from ilp_gallery import dcc; dcc.show_maya("/jobs/lib/clips")

@@ -136,7 +136,7 @@ class PaneHeader(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(c.hover)
             p.drawRoundedRect(a, 3, 3)
-        _arrow(p, a.center(), 8, "left" if self._edge == "left" else "right",
+        _arrow(p, a.center(), 8, {"left": "left", "right": "right", "bottom": "down"}[self._edge],
                c.text if self._hover_arrow else c.muted)
         p.end()
 
@@ -267,18 +267,58 @@ class VerticalTab(QWidget):
         event.accept()
 
 
+class HorizontalTab(VerticalTab):
+    """A collapsed bottom pane's tab: an up arrow and the title, read normally."""
+
+    def __init__(self, text: str, edge: str = "bottom", colors: _Colors | None = None, parent=None) -> None:
+        super().__init__(text, edge, colors, parent)
+        self.setText(text)                             # fixes the size the base class set
+
+    def setText(self, text: str) -> None:
+        self._text = text
+        self.setFixedSize(self.sizeHint())
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 36, STRIP)
+
+    def paintEvent(self, _event) -> None:
+        c = self._colors
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        hover = self.underMouse() or self.isDown()
+        tab = QRectF(0.5, 2.5, self.width() - 1, self.height() - 5)
+        path = QPainterPath()
+        path.addRoundedRect(tab, 4, 4)
+        p.setPen(QPen(c.border, 1))
+        p.fillPath(path, c.hover if hover else c.tab)
+        p.drawPath(path)
+        _arrow(p, QPointF(tab.left() + 11, tab.center().y()), 8, "up", c.text if hover else c.muted)
+        p.setPen(c.text)
+        avail = int(tab.width() - 28)
+        p.drawText(QRectF(tab.left() + 22, tab.top(), avail, tab.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                   self.fontMetrics().elidedText(self.text(), Qt.ElideRight, avail))
+        p.end()
+
+
 class DockStrip(QWidget):
     """The narrow bar on one side of a :class:`PaneArea` holding the tabs of the
-    collapsed panes on that side, stacked top to bottom. Hidden when empty."""
+    collapsed panes on that side: stacked top to bottom on the left and right,
+    side by side along the bottom. Hidden when empty."""
 
     def __init__(self, edge: str, colors: _Colors, parent=None) -> None:
         super().__init__(parent)
         self._edge = edge
         self._colors = colors
-        self.setFixedWidth(STRIP)
-        self._lay = QVBoxLayout(self)
-        # the tabs hang below the panes' tab baseline, level with the pane contents
-        self._lay.setContentsMargins(0, PaneHeader.HEIGHT + 3, 0, 4)
+        if edge == "bottom":
+            self.setFixedHeight(STRIP)
+            self._lay = QHBoxLayout(self)
+            self._lay.setContentsMargins(6, 0, 6, 0)
+        else:
+            self.setFixedWidth(STRIP)
+            self._lay = QVBoxLayout(self)
+            # the tabs hang below the panes' tab baseline, level with the pane contents
+            self._lay.setContentsMargins(0, PaneHeader.HEIGHT + 3, 0, 4)
         self._lay.setSpacing(3)
         self._lay.addStretch(1)
         self.hide()
@@ -292,6 +332,12 @@ class DockStrip(QWidget):
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
+        if self._edge == "bottom":
+            p.fillRect(self.rect(), self._colors.strip)
+            p.setPen(self._colors.border)
+            p.drawLine(QPointF(0, 0.5), QPointF(self.width(), 0.5))
+            p.end()
+            return
         p.fillRect(self.rect().adjusted(0, PaneHeader.HEIGHT, 0, 0), self._colors.strip)
         p.setPen(self._colors.border)
         base = PaneHeader.HEIGHT - 0.5
@@ -307,7 +353,7 @@ class CollapsiblePane(QWidget):
     collapsedChanged = Signal(bool)
 
     def __init__(self, content: QWidget, title: str, edge: str = "left", parent=None) -> None:
-        """``edge``: the side the pane collapses to ("left" or "right")."""
+        """``edge``: the side the pane collapses to ("left", "right" or "bottom")."""
         super().__init__(parent)
         self.content = content
         self.edge = edge
@@ -318,7 +364,7 @@ class CollapsiblePane(QWidget):
         self.colors = _Colors()
         self.header = PaneHeader(title, edge, self.colors)
         self.header.collapseRequested.connect(lambda: self.set_collapsed(True))
-        self.tab = VerticalTab(title, edge, self.colors)
+        self.tab = (HorizontalTab if edge == "bottom" else VerticalTab)(title, edge, self.colors)
         self.tab.setToolTip(f"Expand {title}")
         self.tab.clicked.connect(lambda: self.set_collapsed(False))
         self.tab.hide()
@@ -410,7 +456,8 @@ def _stretch(splitter: QSplitter, i: int) -> int:
 
 
 class PaneArea(QWidget):
-    """Left panes | centre pane | right column, between two strips of collapsed tabs."""
+    """Left panes | centre pane | right column, between two strips of collapsed tabs,
+    above an optional bottom pane (full width) and its strip."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -423,21 +470,36 @@ class PaneArea(QWidget):
         self._column_added = False
         self.left_strip = DockStrip("left", self.colors)
         self.right_strip = DockStrip("right", self.colors)
-        lay = QHBoxLayout(self)
+        self.bottom_strip = DockStrip("bottom", self.colors)
+        self.row = QWidget()
+        row = QHBoxLayout(self.row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self.left_strip)
+        row.addWidget(self.splitter, 1)
+        row.addWidget(self.right_strip)
+        self.vsplit = PaneSplitter(Qt.Vertical, self.colors)    # the row above bottom panes
+        self.vsplit.addWidget(self.row)
+        self.vsplit.setStretchFactor(0, 1)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(self.left_strip)
-        lay.addWidget(self.splitter, 1)
-        lay.addWidget(self.right_strip)
+        lay.addWidget(self.vsplit, 1)
+        lay.addWidget(self.bottom_strip)
 
     def add_pane(self, name: str, pane: CollapsiblePane, where: str = "left", size: int = 250,
                  stretch: int = 0) -> CollapsiblePane:
-        """``where``: "left" (side by side, in order), "center" or "right" (stacked in the
-        right column, in order). ``size``: width, or height for right panes."""
+        """``where``: "left" (side by side, in order), "center", "right" (stacked in the
+        right column, in order) or "bottom" (full width, under everything).
+        ``size``: width, or height for right and bottom panes."""
         pane.area = self
         self.panes[name] = pane
         self._where[name] = where
-        if where == "right":
+        if where == "bottom":
+            self.vsplit.addWidget(pane)
+            self.vsplit.setStretchFactor(self.vsplit.indexOf(pane), 0)
+            self.bottom_strip.add_tab(pane.tab)
+        elif where == "right":
             if not self._column_added:
                 self.splitter.addWidget(self.column)
                 self._column_added = True
@@ -463,7 +525,10 @@ class PaneArea(QWidget):
                 name = next(n for n, p in self.panes.items() if p is w)
                 sizes.append(widths.get(name, 250))
         self.splitter.setSizes(sizes)
-        self.column.setSizes([self._saved[id(self.column.widget(i))] for i in range(self.column.count())])
+        self.column.setSizes([0 if self.column.widget(i).isHidden() else self._saved[id(self.column.widget(i))]
+                              for i in range(self.column.count())])
+        self.vsplit.setSizes([10000] + [0 if self.vsplit.widget(i).isHidden() else self._saved[id(self.vsplit.widget(i))]
+                                        for i in range(1, self.vsplit.count())])
 
     def set_theme(self, t) -> None:
         self.colors.set(t.c("tile"), t.c("tile_hover"), t.c("border"), t.c("text"), t.c("muted"), t.c("panel"))
@@ -471,7 +536,8 @@ class PaneArea(QWidget):
             pane.set_theme(t)
         self.left_strip.update()
         self.right_strip.update()
-        for s in (self.splitter, self.column):
+        self.bottom_strip.update()
+        for s in (self.splitter, self.column, self.vsplit):
             for i in range(s.count()):
                 s.handle(i).update()
 
@@ -512,6 +578,7 @@ class PaneArea(QWidget):
     def _refresh_strips(self) -> None:
         self.left_strip.refresh()
         self.right_strip.refresh()
+        self.bottom_strip.refresh()
 
     def _hide(self, w: QWidget) -> None:
         """Take ``w`` out of its splitter, remembering its size; its space goes to the

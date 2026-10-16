@@ -50,6 +50,7 @@ from .collapsible import CollapsiblePane, PaneArea
 from .details import DetailPanel
 from . import shared as shared_mod
 from .names import format_name
+from .logpane import LogPane
 from .drawer import MIME_DRAWER, DrawerEntry, DrawerWidget, build_key_index, entry_state
 from .model import GalleryModel, ItemRole
 from .search import SearchField, quote_value
@@ -157,7 +158,7 @@ class GalleryWidget(QWidget):
                  name_format: "Callable[[str], object] | None" = None,
                  subtitles: str = "always", show_paths: bool = True,
                  grid_title: str | None = None, drawer_category: str | None = "Assigned",
-                 shared: str | None = None,
+                 shared: str | None = None, log: bool = False,
                  **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
         standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
@@ -183,7 +184,9 @@ class GalleryWidget(QWidget):
         ``drawer_category``: label of a pinned category listing the drawer's items
         ("Assigned"); None: no such category.
         ``shared``: a key; galleries with the same key share one library, its data
-        sources and the thumbnail cache, loaded once (see ilp_gallery.ui.shared)."""
+        sources and the thumbnail cache, loaded once (see ilp_gallery.ui.shared).
+        ``log``: a Log pane along the bottom showing ``logMessage`` (loads, exports,
+        errors), with Clear and Stop; ``collapsed=("log",)`` folds it to a tab."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -289,8 +292,10 @@ class GalleryWidget(QWidget):
         self.view.set_tile_width(self.size_slider.value())
         self.details = DetailPanel(self.cache)
         self.details.setMinimumWidth(300)
+        self.log_pane = LogPane()
         self.drawer = DrawerWidget(key=drawer_key, title=drawer_title, path_key=drawer_path)
         self.details.show_paths = self.drawer.show_paths = show_paths
+        self.details.folder_btn.setVisible(show_paths)
         self._drawer_index: dict[str, GalleryItem] = {}
         self._drawer_dupes: tuple[str, ...] = ()
 
@@ -303,10 +308,17 @@ class GalleryWidget(QWidget):
                 ("tree", self.tree, "Categories", "left", "left", 270, 0),
                 ("grid", self.view, "Assets", "left", "center", 860, 1),
                 ("drawer", self.drawer, drawer_title, "right", "right", 260, 1),
-                ("details", self.details, "Preview", "right", "right", 340, 1)):
+                ("details", self.details, "Preview", "right", "right", 340, 1),
+                ("log", self.log_pane, "Log", "bottom", "bottom", 150, 0)):
             self.panes[name] = self.area.add_pane(name, CollapsiblePane(content, title, edge),
                                                   where, size, stretch)
+        self.area.set_enabled("log", log)              # before the sizes: a hidden pane gets none
         self.area.set_sizes({"tree": 270, "grid": 860}, column_width=360)
+        self.logMessage.connect(self._on_log)
+        self.log_pane.stopRequested.connect(self.stop_task)
+        self.taskStarted.connect(lambda _status, stoppable: self.log_pane.set_running(stoppable))
+        self.taskFinished.connect(lambda _ok: self.log_pane.set_running(False))
+        self.panes["log"].collapsedChanged.connect(lambda _c: self._update_log_title())
         self._grid_title = grid_title
         self._drawer_category = drawer_category
         self.splitter = self.area.splitter
@@ -673,6 +685,23 @@ class GalleryWidget(QWidget):
             self.tree.remove_special(self.DRAWER_PATH)
 
     # ---------------------------------------------------------------- panes
+    def has_log(self) -> bool:
+        return self.panes["log"].is_enabled()
+
+    def _on_log(self, message: str) -> None:
+        if not self.has_log():
+            return
+        self.log_pane.log(message)
+        if not self.panes["log"].is_collapsed():
+            self.log_pane.unseen = 0
+        self._update_log_title()
+
+    def _update_log_title(self) -> None:
+        if not self.panes["log"].is_collapsed():
+            self.log_pane.unseen = 0
+        n = self.log_pane.unseen
+        self.panes["log"].set_title(f"Log ({n})" if n else "Log")
+
     def set_collapsed(self, pane: str, collapsed: bool = True) -> None:
         """Collapse ("tree", "grid", "details", "drawer") to a vertical tab, or expand it."""
         if pane not in self.panes:
@@ -1086,7 +1115,7 @@ class GalleryWidget(QWidget):
         return int(self.area._saved.get(id(w), 0))
 
     def _apply_sizes(self) -> None:
-        for s in (self.area.splitter, self.area.column):
+        for s in (self.area.splitter, self.area.column, self.area.vsplit):
             sizes = [0 if s.widget(i).isHidden() else self.area._saved.get(id(s.widget(i)), 0) or s.sizes()[i]
                      for i in range(s.count())]
             if any(sizes):

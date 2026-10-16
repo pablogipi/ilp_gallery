@@ -276,3 +276,36 @@ def test_toolbar_button_icons(app):
     with pytest.raises(ValueError):
         w.add_toolbar_button("", lambda: None, icon="spinner")
     w.close()
+
+
+def test_log_pane(app):
+    w = make(app, drawer=True, log=True, collapsed=("log",))
+    assert w.has_log() and w.panes["log"].parentWidget() is w.area.vsplit
+    strip, tab = w.area.bottom_strip, w.panes["log"].tab
+    assert not strip.isHidden() and tab.height() == STRIP and tab.width() > tab.height()
+    assert strip.y() > w.panes["grid"].y()                          # folded along the bottom
+    w.logMessage.emit("Loading clips…")
+    w.logMessage.emit("ERROR loading clips: boom\nTraceback line")
+    assert w.panes["log"].tab.text() == "Log (2)"                     # unseen while folded
+    text = w.log_pane.text()
+    assert "Loading clips…" in text and "          Traceback line" in text
+    w.set_collapsed("log", False)
+    spin(app)
+    assert w.panes["log"].title() == "Log" and strip.isHidden()
+    assert 100 < w.panes["log"].height() < 220                       # full width, under the rest
+    assert w.panes["log"].width() >= w.width() - 2
+    w.taskStarted.emit("Exporting…", True)
+    assert w.log_pane.stop_btn.isEnabled()
+    w.taskFinished.emit(True)
+    assert not w.log_pane.stop_btn.isEnabled()
+    w.log_pane.clear_btn.click()
+    assert w.log_pane.text() == ""
+    w.close()
+
+
+def test_no_log_pane_by_default(app):
+    w = make(app)
+    assert not w.has_log() and w.panes["log"].isHidden()
+    w.logMessage.emit("x")
+    assert w.log_pane.text() == ""
+    w.close()

@@ -24,5 +24,3 @@ variants = [
 def commands():
     env.PATH.append("{root}/bin")
     env.PYTHONPATH.append("{root}/python")
-    # FIXME: do this only if houdini is in the requiremenets
-    # env.HOUDINI_PATH.append("{root}/houdini")

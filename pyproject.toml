@@ -18,7 +18,7 @@ test = ["pytest"]
 ilp-gallery = "ilp_gallery.app:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["python"]
 
 [tool.setuptools.package-data]
 "ilp_gallery.ui.sgi" = ["fonts/*.ttf", "fonts/OFL.txt"]

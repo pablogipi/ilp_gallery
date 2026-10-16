@@ -377,3 +377,9 @@ bind_state(gallery, "motion_clips_panel")          # after sources and options a
 - Galleries bound to the same key share one entry: the last change wins.
 
 `GalleryBrowser` passes anything it doesn't define itself through to its `GalleryWidget` (`reload_source`, `add_toolbar_button`, the drawer and state API), and its `add_source()` returns the source in use, like the widget's.
+
+## 14. Log pane
+
+`GalleryWidget(log=True)` adds a **Log** pane along the bottom, full width: every `logMessage` (loads, polls, exporter output, errors with their traceback indented underneath) with a time stamp, a **Clear** button, and **Stop** while a stoppable task (a threaded export) runs. It collapses downward to a tab in a strip along the bottom (`collapsed=("log",)` builds it folded; the state is saved like the other panes); while folded, its tab counts new messages ("Log (3)"). `logMessage` still fires as before, so a host can send the same messages elsewhere too, e.g. Houdini's status bar.
+
+`PaneArea.add_pane(..., where="bottom")` is the generic slot it uses: full-width panes under the rest, folding to tabs in the bottom strip.
