@@ -5,7 +5,7 @@
 tags
 build/
 .idea
-sesson.vim
+session.vim
 backup
 tags
 *.vscode
