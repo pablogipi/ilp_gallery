@@ -1007,10 +1007,12 @@ class GalleryWidget(QWidget):
     # ---------------------------------------------------------------- UI state
     UI_STATE_VERSION = 1
 
-    def ui_state(self) -> dict:
+    def ui_state(self, include_drawer: bool = False) -> dict:
         """What a user set up, as plain JSON-able data: the search text, the selected
         category, collapsed panes, tile size and pane sizes. A host can store it (a
-        node parameter, a file) and give it back with :meth:`set_ui_state`."""
+        node parameter, a file) and give it back with :meth:`set_ui_state`.
+        ``include_drawer`` adds the drawer's entries, for hosts with nowhere else to
+        keep them (a panel not tied to a node)."""
         sizes = {}
         for name, pane in self.panes.items():
             sizes[name] = self._pane_size(pane)
@@ -1023,7 +1025,8 @@ class GalleryWidget(QWidget):
             "collapsed": [n for n, p in self.panes.items() if p.is_collapsed()],
             "tile_size": self.size_slider.value(),
             "sizes": sizes,
-        }
+        } | ({"drawer": [[e.key, e.path, e.enabled] for e in self.drawer.entries()]}
+             if include_drawer else {})
 
     def set_ui_state(self, state: "dict | str") -> None:
         """Restore :meth:`ui_state` output (a dict or its JSON). Missing keys are left
@@ -1058,6 +1061,8 @@ class GalleryWidget(QWidget):
             if "category" in state:
                 self._pending_category = tuple(state["category"] or ())
                 self._apply_pending_category()
+            if "drawer" in state and self.has_drawer():
+                self.set_drawer(state["drawer"] or [])
         finally:
             self._state_quiet = False
             self._state_timer.stop()

@@ -360,3 +360,20 @@ source = gallery.add_source(MotionClipsSource())    # returns the source actuall
 - **One poller.** Only one of the galleries polls the sources; when it closes or its panel is deleted, another takes over.
 - **Per-gallery state stays separate:** search, category, collapsed panes, drawer contents, selection.
 - Listeners are held weakly, so a host deleting a panel without closing it doesn't leave a dead listener behind. `ilp_gallery.ui.shared.drop_shared(key)` forgets a shared library.
+
+## 13. State saved in the scene
+
+`ilp_gallery.ui.persist.bind_state(gallery, key)` keeps a gallery's UI state in the open scene: it's restored when the gallery is built and whenever a scene is opened, saved on every change, and reset to the gallery's defaults on File > New.
+
+```python
+from ilp_gallery.ui.persist import bind_state
+bind_state(gallery, "motion_clips_panel")          # after sources and options are set up
+```
+
+- **What:** `ui_state(include_drawer=True)`: search, category, collapsed panes, tile size, pane sizes and the drawer's entries (`include_drawer=False` leaves the drawer out, e.g. when a node already stores it).
+- **Where:** Houdini, user data on `/obj` (saved in the .hip); Maya, `fileInfo`; Nuke, a hidden knob on the Root node; standalone, QSettings (per user). Values are base64 JSON in Maya and Nuke, which escape text their own way.
+- **A node's parameter:** `HoudiniParmStore(node_or_callable, "gallery_ui_state")`, e.g. for a Parameters-pane panel: pass a callable returning the node it shows, and call `binding.restore()` when that node changes. Writes aren't undo steps.
+- **Other stores:** pass `store=` any object with `read(key)`, `write(key, text)` and optionally `watch(callback) -> unwatch` (`callback("load" | "clear")`). `MemoryStore` is one for tests.
+- Galleries bound to the same key share one entry: the last change wins.
+
+`GalleryBrowser` passes anything it doesn't define itself through to its `GalleryWidget` (`reload_source`, `add_toolbar_button`, the drawer and state API), and its `add_source()` returns the source in use, like the widget's.

@@ -171,8 +171,20 @@ class GalleryBrowser(QMainWindow):
             self.log(f"Export command: {self.gallery.command_template}")
 
     # -- API passthrough (so tools can treat the window like the widget) ------
-    def add_source(self, source, background: bool = True) -> None:
-        self.gallery.add_source(source, background=background)
+    def add_source(self, source, background: bool = True):
+        """See GalleryWidget.add_source: returns the source in use (shared galleries)."""
+        return self.gallery.add_source(source, background=background)
+
+    def __getattr__(self, name):
+        """Anything else the window doesn't have comes from its gallery widget
+        (reload_source, add_toolbar_button, drawer API, ui_state...)."""
+        if name in ("gallery", "__setstate__") or name.startswith("__"):
+            raise AttributeError(name)
+        try:
+            gallery = self.__dict__["gallery"] if "gallery" in self.__dict__ else QMainWindow.__getattribute__(self, "gallery")
+        except AttributeError:
+            raise AttributeError(name) from None
+        return getattr(gallery, name)
 
     def register_exporter(self, *args, **kwargs):
         return self.gallery.register_exporter(*args, **kwargs)
