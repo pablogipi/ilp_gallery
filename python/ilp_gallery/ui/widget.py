@@ -27,6 +27,8 @@ import logging
 import weakref
 import os
 import shlex
+import shutil
+import tempfile
 import subprocess
 import traceback
 from typing import Callable, Iterable
@@ -159,6 +161,8 @@ class GalleryWidget(QWidget):
                  subtitles: str = "always", show_paths: bool = True,
                  grid_title: str | None = None, drawer_category: str | None = "Assigned",
                  shared: str | None = None, log: bool = False,
+                 view_command: str | None = None, view_field: str | None = None,
+                 command_shell: bool = True,
                  **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
         standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
@@ -186,7 +190,14 @@ class GalleryWidget(QWidget):
         ``shared``: a key; galleries with the same key share one library, its data
         sources and the thumbnail cache, loaded once (see ilp_gallery.ui.shared).
         ``log``: a Log pane along the bottom showing ``logMessage`` (loads, exports,
-        errors), with Clear and Stop; ``collapsed=("log",)`` folds it to a tab."""
+        errors), with Clear and Stop; ``collapsed=("log",)`` folds it to a tab.
+        ``view_command``: how "View" opens items (double-click, context menus, the
+        View button); default ``$ILP_GALLERY_VIEW_COMMAND`` or ``"rv {previews}"``;
+        "" turns viewing off. See :meth:`set_view_command`.
+        ``view_field``: the record field View opens, e.g. "movie" for a full quality
+        movie next to a lighter preview; default: the item's movie / GIF or ``preview``.
+        ``command_shell``: run the view and export commands through ``/bin/sh -c``
+        (default) or directly."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -217,7 +228,9 @@ class GalleryWidget(QWidget):
         self._pool.setMaxThreadCount(4)
         self._export_enabled = False
         self._export_label: str | None = None          # set_export_label() override
-        self.preview_command = ""                       # e.g. "rv {preview}"
+        self.preview_command = ""                       # set_view_command(), e.g. "rv {previews}"
+        self.view_field = view_field                    # see view_media()
+        self.command_shell = command_shell
         self._path_filter: tuple = ()
         self._search_ids: list[str] = []
 
@@ -354,6 +367,7 @@ class GalleryWidget(QWidget):
         self.details.exportMenuRequested.connect(self._export_menu)
         self.details.copyCommandRequested.connect(self.copy_command)
         self._update_copy_button()
+        self.set_view_command(default_view_command() if view_command is None else view_command)
         self.details.previewRequested.connect(self.preview)
         self.details.openFolderRequested.connect(lambda it: _open(_folder(it)))
         self.details.categoryClicked.connect(self.tree.select_path)
@@ -621,7 +635,7 @@ class GalleryWidget(QWidget):
         """Registered exporters (only those accepting all ``items`` when given)."""
         exs = list(self._exporters)
         if self.command_template:
-            exs.append(CommandExporter(self.command_template))
+            exs.append(CommandExporter(self.command_template, shell=self.command_shell))
         if items:
             exs = [e for e in exs if all(e.accepts(it) for it in items)]
         return exs
@@ -926,18 +940,62 @@ class GalleryWidget(QWidget):
         self.delegate.placeholder = icon
         self.view.viewport().update()
 
-    # ---------------------------------------------------------------- preview
+    # ---------------------------------------------------------------- view
+    def set_view_command(self, template: str | None) -> None:
+        """How "View" opens items in an external player (RV by default): double-click
+        on a tile or a drawer row, View in both context menus, the View button.
+
+        A command template, e.g. ``"rv {previews}"`` (all chosen items in one RV) or,
+        where RV comes from rez, ``"rez-env rv -- rv {previews}"``. Placeholders as
+        for the export command, plus ``{preview}`` / ``{previews}``. Runs without a
+        shell, detached. "" or None turns viewing off."""
+        self.set_preview_command(template)
+        self.drawer.viewer = self._view_entries if self.preview_command else None
+
+    def _view_entries(self, entries) -> None:
+        items = [it for it in (self._drawer_index.get(e.key) for e in entries) if it is not None]
+        if items:
+            self.view_items(items)
+
+    def viewer_available(self) -> bool:
+        """Whether the view command's program is on PATH. Without it, double-click
+        plays the item in the details panel instead (View still reports the error)."""
+        try:
+            program = shlex.split(self.preview_command)[0]
+        except (ValueError, IndexError):
+            return False
+        return shutil.which(program) is not None
+
+    def view_items(self, items: list[GalleryItem] | None = None) -> int:
+        """Open ``items`` (default: the selection) with the view command."""
+        return self.preview(items)
+
     def set_preview_command(self, template: str | None) -> None:
-        """Command that opens an item's preview movie, e.g. ``"rv {preview}"``.
+        """Older name of :meth:`set_view_command` (doesn't wire the drawer).
+
+        Command that opens an item's preview movie, e.g. ``"rv {preview}"``.
 
         Placeholders as for the export command, plus ``{preview}`` (the preview
         movie, or the item itself if it's a movie). Use ``{previews}`` to open all
-        selected previews in one call (``"rv {previews}"``). Runs without a shell,
+        selected previews in one call (``"rv {previews}"``). Runs through the shell
+        (``command_shell``),
         detached, so the player doesn't block the gallery.
         """
         self.preview_command = (template or "").strip()
         self.details.can_preview = self.can_preview
         self.details.set_preview_enabled(bool(self.preview_command))
+
+    def view_media(self, item: GalleryItem) -> str:
+        """The file View opens for ``item`` (``{preview}`` / ``{previews}``): the
+        ``view_field`` value when set (e.g. "movie"), else the item's movie or GIF, or
+        its ``preview``. "" when there is none."""
+        if self.view_field:
+            try:
+                value = item.value(self.view_field)
+            except KeyError:
+                return ""
+            return os.path.expandvars(os.path.expanduser(str(value))) if value else ""
+        return (item.motion or (item.preview, ""))[0] or item.preview or ""
 
     def can_preview(self, item: GalleryItem) -> bool:
         """Whether the preview command has what it needs for ``item``: something to play
@@ -946,7 +1004,7 @@ class GalleryWidget(QWidget):
             return False
         for key in template_keys(self.preview_command):
             if key in ("preview", "previews"):
-                if item.motion is None and not item.preview:
+                if not self.view_media(item):
                     return False
             elif key not in BUILTIN_FIELDS and not item.metadata.get(key):
                 return False
@@ -958,25 +1016,57 @@ class GalleryWidget(QWidget):
         items = [it for it in (items if items is not None else self.selected_items()) if self.can_preview(it)]
         if not items or not self.preview_command:
             if not self.preview_command:
-                self.logMessage.emit("No preview command set (Settings, or set_preview_command()).")
+                self.logMessage.emit("No view command set (Settings, or set_view_command()).")
             return 0
+        def literal(text: str) -> str:              # a value placed into a template
+            return text.replace("{", "{{").replace("}", "}}")
+
         template = self.preview_command
         if "{previews}" in template:
-            joined = " ".join(shlex.quote((it.motion or (it.preview, ""))[0]) for it in items)
-            cmds = [format_command(template.replace("{previews}", joined.replace("{", "{{").replace("}", "}}")),
-                                   items[0])]
+            joined = " ".join(shlex.quote(self.view_media(it)) for it in items)
+            cmds = [format_command(template.replace("{previews}", literal(joined)), items[0])]
         else:
-            cmds = [format_command(template, it) for it in items]
+            cmds = [format_command(template.replace("{preview}", literal(shlex.quote(self.view_media(it)))), it)
+                    for it in items]
         started = 0
         for cmd in cmds:
             try:
-                subprocess.Popen(shlex.split(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, start_new_session=True)
-                self.logMessage.emit(f"Preview: {cmd}")
+                # stderr to a file, not a pipe: the viewer runs on its own and nobody
+                # reads a pipe, but a quick failure ("rv: not found") is still reported
+                err = tempfile.TemporaryFile(mode="w+")
+                if self.command_shell:          # one string: sh -c gets the whole line
+                    proc = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
+                else:
+                    proc = subprocess.Popen(shlex.split(cmd), stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
+                self._watch_launch(proc, cmd, err)
+                self.logMessage.emit(f"View: {cmd}")
                 started += 1
             except (OSError, ValueError) as exc:
-                self.logMessage.emit(f"ERROR preview: {cmd}: {exc}")
+                hint = (" (not found: is it on PATH here? With rez, e.g. \"rez-env rv -- rv {previews}\")"
+                        if isinstance(exc, FileNotFoundError) else "")
+                self.logMessage.emit(f"ERROR view: {cmd}: {exc}{hint}")
         return started
+
+    LAUNCH_CHECK_MS = 2500
+
+    def _watch_launch(self, proc, cmd: str, err) -> None:
+        """Report a viewer that exits with an error soon after starting (with a shell,
+        a missing program doesn't raise: sh prints "not found" and exits 127)."""
+        def check() -> None:
+            code = proc.poll() if hasattr(proc, "poll") else None
+            try:
+                if code:                                       # exited, and failed
+                    err.seek(0)
+                    tail = " | ".join(line.strip() for line in err.read().splitlines()[-3:] if line.strip())
+                    hint = (" (not found: is it on PATH here? With rez, e.g. \"rez-env rv -- rv {previews}\")"
+                            if code == 127 else "")
+                    self.logMessage.emit(f"ERROR view: exit code {code}: {cmd}"
+                                         + (f": {tail}" if tail else "") + hint)
+            finally:
+                err.close()                # the viewer keeps its own copy if still running
+        QTimer.singleShot(self.LAUNCH_CHECK_MS, check)
 
     def set_export_enabled(self, on: bool) -> None:
         """Show Export / Copy command (automatic once an exporter is registered)."""
@@ -1356,6 +1446,9 @@ class GalleryWidget(QWidget):
         if self._default_action:
             self._default_action([item])
             return
+        if self.can_preview(item) and self.viewer_available():   # double-click: View (RV)
+            self.view_items([item])
+            return
         if not self.details.isVisible():
             self.set_details_visible(True)
         self.details.set_item(item, autoplay=True)
@@ -1386,8 +1479,8 @@ class GalleryWidget(QWidget):
             menu.addAction(label, lambda cb=cb, items=items: cb(items))
         moving = [it for it in items if self.can_preview(it)]
         if self.preview_command and moving:
-            menu.addAction(f"Preview ({len(moving)})" if len(moving) > 1 else "Preview",
-                           lambda: self.preview(moving))
+            menu.addAction(f"View ({len(moving)})" if len(moving) > 1 else "View",
+                           lambda: self.view_items(moving))
         menu.addSeparator()
         if self._export_enabled:
             menu.addAction("Copy command", lambda: self.copy_command(items))
@@ -1480,6 +1573,14 @@ class GalleryWidget(QWidget):
         if self._shared is not None and self._shared.poller is not None and self._shared.poller() is self:
             self._shared.poller = None                 # another gallery takes over polling
         super().closeEvent(e)
+
+
+DEFAULT_VIEW_COMMAND = "rv {previews}"
+
+
+def default_view_command() -> str:
+    """$ILP_GALLERY_VIEW_COMMAND if set (e.g. "rez-env rv -- rv {previews}"), else RV."""
+    return os.environ.get("ILP_GALLERY_VIEW_COMMAND", DEFAULT_VIEW_COMMAND)
 
 
 def _folder(item: GalleryItem) -> str:

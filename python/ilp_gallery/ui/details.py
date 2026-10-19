@@ -67,8 +67,8 @@ class DetailPanel(QWidget):
         self.more_btn.setVisible(False)
         self.copy_btn = QPushButton("Copy path")       # "Copy command" with a command template
         self.folder_btn = QPushButton("Open folder")
-        self.preview_btn = QPushButton("Preview")
-        self.preview_btn.setToolTip("Open the preview movie with the preview command")
+        self.preview_btn = QPushButton("View")
+        self.preview_btn.setToolTip("Open in the viewer (RV); also double-click")
         self.preview_btn.setVisible(False)
         self._preview_on = False
         self.can_preview = lambda item: item.motion is not None   # set by the gallery
@@ -82,9 +82,9 @@ class DetailPanel(QWidget):
         export_group.addWidget(self.more_btn)
         buttons.addLayout(export_group)
         buttons.addWidget(self.copy_btn)                # beside the main action
+        buttons.addWidget(self.preview_btn)             # View
         for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn, self.preview_btn):
             b.setCursor(Qt.PointingHandCursor)
-        buttons.addWidget(self.preview_btn)
         buttons.addStretch(1)
         # utilities on a second row, so the panel stays narrow
         tools = QHBoxLayout()

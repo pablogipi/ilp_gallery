@@ -4,6 +4,7 @@ handlers per host."""
 
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -136,7 +137,13 @@ def launched(monkeypatch):
 
     class FakePopen:
         def __init__(self, args, **kw):
-            calls.append(args)
+            # with a shell the whole line must arrive as one string (a list would
+            # give sh only the program, and RV no file)
+            assert isinstance(args, str) == bool(kw.get("shell"))
+            calls.append(shlex.split(args) if isinstance(args, str) else args)
+
+        def poll(self):
+            return None
 
     # fake only the gallery's view of subprocess, so the test can still run ffmpeg itself
     from ilp_gallery.ui import widget
@@ -174,7 +181,7 @@ def test_preview_without_command_logs(gallery, launched):
     gallery.logMessage.connect(lines.append)
     gallery.set_preview_command("")
     assert gallery.preview([gallery.library.get("a")]) == 0 and launched == []
-    assert any("No preview command" in m for m in lines)
+    assert any("No view command" in m for m in lines)
 
 
 def test_preview_button_only_for_items_that_move(gallery, app):
@@ -277,3 +284,87 @@ def test_gif_scrub_with_movie_for_rv(gallery, launched, media, tmp_path):
     assert launched == [["rv", media.movie], ["rv", media.movie]]
     gallery.set_preview_command("rv {preview}")
     assert gallery.can_preview(g) and not gallery.can_preview(m)                    # m has nothing to play
+
+
+def test_view_defaults_and_override(app, monkeypatch):
+    from ilp_gallery.ui import GalleryWidget
+    monkeypatch.delenv("ILP_GALLERY_VIEW_COMMAND", raising=False)
+    assert GalleryWidget().preview_command == "rv {previews}"            # RV by default
+    monkeypatch.setenv("ILP_GALLERY_VIEW_COMMAND", "rez-env rv -- rv {previews}")
+    assert GalleryWidget().preview_command == "rez-env rv -- rv {previews}"
+    assert GalleryWidget(view_command="djv {preview}").preview_command == "djv {preview}"
+    off = GalleryWidget(view_command="")
+    assert off.preview_command == "" and off.drawer.viewer is None
+
+
+def test_double_click_views_when_the_viewer_exists(gallery, launched, media, monkeypatch):
+    from ilp_gallery.ui import widget
+    gallery.set_view_command("rv {previews}")
+    _settle(app := QtWidgets.QApplication.instance())
+    monkeypatch.setattr(widget.shutil, "which", lambda prog: None)       # no rv here
+    gallery._on_activated(gallery.model.index_of("a"))
+    assert launched == [] and gallery.details.item.id == "a"           # plays inline instead
+    monkeypatch.setattr(widget.shutil, "which", lambda prog: "/usr/bin/" + prog)
+    gallery._on_activated(gallery.model.index_of("b"))
+    assert launched == [["rv", media.movie]]
+
+
+def test_view_in_menus_button_and_drawer(app, media, launched):
+    from ilp_gallery.ui import GalleryWidget
+    g = GalleryWidget(drawer=True, drawer_key="id", view_command="rv {previews}")
+    g.set_items([make_record(media.clip, id="a", preview=media.movie)])
+    _settle(app)
+    d = g.details
+    d.set_item(g.library.get("a"))
+    assert d.preview_btn.text() == "View" and d.preview_btn.isVisibleTo(d)
+    assert d.preview_btn.parentWidget() is d.copy_btn.parentWidget()
+    g.add_to_drawer([g.library.get("a")])
+    menu = g.drawer.context_menu(["a"])
+    view = next(a for a in menu.actions() if a.text() == "View")
+    view.trigger()
+    assert launched == [["rv", media.movie]]
+    g.drawer._show_entry(g.drawer.list.item(0))                        # double-click a row
+    assert len(launched) == 2
+    g.cache.shutdown()
+
+
+def _settle(app, t=0.3):
+    import time
+    end = time.time() + t
+    while time.time() < end:
+        app.processEvents()
+
+
+def test_view_field_and_shell(app, media, launched, tmp_path):
+    from ilp_gallery.ui import GalleryWidget
+    movie = str(tmp_path / "walk v001.mov")                              # a space: must stay one word
+    g = GalleryWidget(view_command="rv {previews}", view_field="movie")
+    g.set_items([make_record(media.clip, id="a", preview=media.movie, movie=movie),
+                 make_record(media.clip + "2", id="b", preview=media.movie)])  # no movie
+    _settle(app)
+    a, b = g.library.get("a"), g.library.get("b")
+    assert g.view_media(a) == movie and g.can_preview(a) and not g.can_preview(b)
+    assert g.view_items([a, b]) == 1 and launched == [["rv", movie]]
+    g.set_view_command("rv -fullscreen {preview}")
+    g.view_items([a])
+    assert launched[-1] == ["rv", "-fullscreen", movie]
+    g.command_shell = False
+    g.view_items([a])
+    assert launched[-1] == ["rv", "-fullscreen", movie]
+    g.cache.shutdown()
+
+
+def test_shell_launch_failure_is_reported(app, monkeypatch):
+    import time
+    from ilp_gallery.ui import GalleryWidget
+    g = GalleryWidget(view_command="no_such_viewer_xyz {previews}")
+    g.LAUNCH_CHECK_MS = 50
+    g.set_items([make_record("/tmp/a.mov", id="a")])
+    _settle(app)
+    lines = []
+    g.logMessage.connect(lines.append)
+    assert g.view_items([g.library.get("a")]) == 1                       # sh starts fine...
+    end = time.time() + 3
+    while time.time() < end and not any("exit code 127" in m for m in lines):
+        app.processEvents()
+    assert any("exit code 127" in m and "not found" in m for m in lines)  # ...and fails: reported

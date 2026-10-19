@@ -12,3 +12,4 @@ tags
 *.code-workspace
 *.patch
 megascans.json
+lock

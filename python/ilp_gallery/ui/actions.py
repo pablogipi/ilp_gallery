@@ -56,7 +56,7 @@ from typing import Any, Callable, Iterable
 from PySide6.QtCore import QMimeData, QUrl
 
 from ..core.item import GalleryItem
-from .tasks import format_command
+from .tasks import format_command, kill_command, start_command
 
 MIME_ITEMS = "application/x-ilp-gallery-items"
 
@@ -122,22 +122,23 @@ class Exporter:
 class CommandExporter(Exporter):
     """Runs a shell-free command template per item (the Settings "Export command")."""
 
-    def __init__(self, template: str, label: str = "Run export command") -> None:
+    def __init__(self, template: str, label: str = "Run export command", shell: bool = True) -> None:
         super().__init__(fn=self._run_one, label=label, arg="item", threaded=True)
         self.template = template
+        self.shell = shell
         self._proc: subprocess.Popen | None = None
 
     def _run_one(self, item: GalleryItem, log) -> bool:
         cmd = format_command(self.template, item)
         log(f"$ {cmd}")
         try:
-            self._proc = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE,
-                                          stderr=subprocess.STDOUT, text=True, bufsize=1)
+            self._proc = start_command(cmd, self.shell, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, bufsize=1)
         except OSError as exc:
             log(f"   failed to start: {exc}")
             return False
         if self._cancelled:
-            self._proc.kill()
+            kill_command(self._proc)
         for line in self._proc.stdout:
             log("   " + line.rstrip())
         rc = self._proc.wait()
@@ -155,7 +156,7 @@ class CommandExporter(Exporter):
         def kill():
             self._cancelled = True
             if self._proc:
-                self._proc.kill()
+                kill_command(self._proc)
         if set_cancel_hook:
             set_cancel_hook(kill)
         return super().run(items, log, cancelled, on_progress)

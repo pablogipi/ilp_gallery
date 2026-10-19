@@ -24,7 +24,7 @@ from .widget import GalleryWidget
 ORG, APP = "ILPvfx", "ILPGallery"
 
 
-DEFAULT_PREVIEW_COMMAND = "rv {preview}"
+from .widget import default_view_command  # noqa: E402
 
 
 def settings() -> QSettings:
@@ -46,7 +46,7 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(620)
         self.cmd = QLineEdit(setting("export/command"))
         self.cmd.setPlaceholderText("e.g. stockpile export --asset {asset_dir}")
-        self.preview_cmd = QLineEdit(setting("preview/command", DEFAULT_PREVIEW_COMMAND))
+        self.preview_cmd = QLineEdit(setting("preview/command", default_view_command()))
         self.preview_cmd.setPlaceholderText("e.g. rv {preview}   ·   rv {previews} opens a selection in one RV")
         self.sources = QLineEdit(setting("library/sources"))
         self.sources.setPlaceholderText("library JSON files or folders, ':' separated")
@@ -60,7 +60,7 @@ class SettingsDialog(QDialog):
 
         help_ = QLabel("Placeholders: {id} {name} {asset_dir} {json} {path} {type_label} {thumbnail} {preview}, "
                        "and any metadata key, e.g. {movie}<br>"
-                       "Runs once per asset without a shell; output goes to the Export log.",
+                       "Runs once per asset through the shell (sh -c); output goes to the Export log.",
                        objectName="muted")
         help_.setWordWrap(True)
         form = QFormLayout()
@@ -131,7 +131,7 @@ class GalleryBrowser(QMainWindow):
         self.gallery.themeChanged.connect(self._restyle)
         self.gallery.set_export_enabled(True)
         self.gallery.command_template = setting("export/command")
-        self.gallery.set_preview_command(setting("preview/command", DEFAULT_PREVIEW_COMMAND))
+        self.gallery.set_view_command(setting("preview/command", default_view_command()))
 
         # toolbar buttons (right of the search bar)
         self.export_btn = self.gallery.add_toolbar_button(f"{self.gallery.export_label()} selected",
@@ -303,7 +303,7 @@ class GalleryBrowser(QMainWindow):
         self.theme.polish(dlg)
         if dlg.exec():
             self.gallery.command_template = setting("export/command")
-            self.gallery.set_preview_command(setting("preview/command", DEFAULT_PREVIEW_COMMAND))
+            self.gallery.set_view_command(setting("preview/command", default_view_command()))
             self.log(f"Export command: {self.gallery.command_template or '(none)'}")
             self.log(f"Preview command: {self.gallery.preview_command or '(none)'}")
 

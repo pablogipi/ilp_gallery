@@ -6,13 +6,15 @@ The export is a command template, so each studio plugs in its own tool::
     python /tools/ms_export.py --id {id} --json {json}
 
 Placeholders: {id} {name} {path} {asset_dir} {json} {type} {type_label}
-{thumbnail}. Values are shell-quoted; the command runs without a shell.
+{thumbnail}. Values are shell-quoted; the command runs through ``/bin/sh -c``
+(see :func:`start_command`).
 """
 
 from __future__ import annotations
 
 import os
 import shlex
+import signal
 import string
 import subprocess
 import threading
@@ -57,8 +59,32 @@ def template_keys(template: str) -> set[str]:
 
 
 def format_command(template: str, item: GalleryItem) -> str:
+    """``template`` with the item's values filled in, each shell-quoted, so the result
+    is a valid shell command line."""
     fields = _Fields({k: shlex.quote(str(v)) for k, v in item_fields(item).items()})
     return template.format_map(fields)
+
+
+def start_command(cmd: str, shell: bool = True, **popen_kw) -> subprocess.Popen:
+    """Start a formatted command line in its own process group.
+
+    ``shell=True`` runs it through ``/bin/sh -c`` as one string: PATH lookups,
+    environment variables, ``&&`` and pipes work, and wrapper scripts without a
+    ``#!`` line run. Never a *list* with a shell: ``sh`` would run only the first word
+    and hand the rest to the shell itself, so the program starts with no arguments.
+    ``shell=False`` splits the line and runs the program directly."""
+    if shell:
+        return subprocess.Popen(cmd, shell=True, start_new_session=True, **popen_kw)
+    return subprocess.Popen(shlex.split(cmd), start_new_session=True, **popen_kw)
+
+
+def kill_command(proc: subprocess.Popen) -> None:
+    """Kill a command started with :func:`start_command`, and what it started (with a
+    shell, ``proc`` is the shell, not the program)."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, AttributeError):
+        proc.kill()
 
 
 class TaskThread(QThread):
@@ -91,7 +117,7 @@ class TaskThread(QThread):
         self.finishedOk.emit(ok and not self.cancelled())
 
 
-def make_export_job(items: list[GalleryItem], template: str) -> Callable:
+def make_export_job(items: list[GalleryItem], template: str, shell: bool = True) -> Callable:
     def job(log, cancelled, thread: TaskThread) -> bool:
         failures = 0
         for n, it in enumerate(items, 1):
@@ -102,13 +128,13 @@ def make_export_job(items: list[GalleryItem], template: str) -> Callable:
             log(f"[{n}/{len(items)}] {it.name} ({it.id})")
             log(f"$ {cmd}")
             try:
-                proc = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        text=True, bufsize=1)
+                proc = start_command(cmd, shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, bufsize=1)
             except OSError as exc:
                 log(f"   failed to start: {exc}")
                 failures += 1
                 continue
-            thread.on_cancel = proc.kill
+            thread.on_cancel = lambda proc=proc: kill_command(proc)
             if cancelled():  # Stop pressed while the process was starting
                 proc.kill()
             for line in proc.stdout:

@@ -123,7 +123,7 @@ gallery.set_preview_command("rv {preview}")      # one player per item
 gallery.set_preview_command("rv {previews}")     # the whole selection in one player
 ```
 
-It runs without a shell and detached, so the player doesn't block the gallery. In the browser it's also in Settings ("Preview command", default `rv {preview}`, or `ILP_GALLERY_PREVIEW_CMD`).
+It runs through the shell and detached, so the player doesn't block the gallery. In the browser it's also in Settings ("Preview command", default `rv {preview}`, or `ILP_GALLERY_PREVIEW_CMD`).
 
 Command templates (export and preview) also accept **any metadata key** with a plain value, so a record can keep a light preview for the gallery and point the player at the full movie:
 
@@ -386,3 +386,14 @@ bind_state(gallery, "motion_clips_panel")          # after sources and options a
 `PaneArea.add_pane(..., where="bottom")` is the generic slot it uses: full-width panes under the rest, folding to tabs in the bottom strip.
 
 **Copy path / Copy command.** The details panel's copy button, next to the main action, copies the item's path ("Copy path"), or its export command when a command template is set in Settings ("Copy command"); the label follows `command_template`.
+
+## 15. View (RV)
+
+"View" opens items in an external viewer, RV by default: double-click a tile or a drawer row, **View** in the tiles' and the drawer's context menus, or the **View** button next to Copy path in the details panel.
+
+- **The command** is a template, run through the shell (`/bin/sh -c`, as one line) and detached: `"rv {previews}"` by default (every chosen item in one RV). `{preview}` runs one command per item. Placeholders are those of the export command; values are shell-quoted, so paths with spaces stay one argument. `command_shell=False` runs the program directly instead (no PATH tricks, wrappers or `&&`).
+- **What it opens:** the item's movie or GIF, or its `preview`. `view_field="movie"` opens that record field instead, e.g. a full quality QuickTime next to a light preview GIF; items without it can't be viewed.
+- **Errors:** a viewer that exits with an error within ~2 s is reported in the log with its last stderr lines (a missing program shows as exit code 127, "not found").
+- **Override it** per gallery with `view_command=` or `set_view_command()`, or for everyone at once with the environment variable `ILP_GALLERY_VIEW_COMMAND`, e.g. `rez-env rv -- rv {previews}` where RV comes from rez. `view_command=""` turns viewing off (no menu entries, no button, double-click plays inline). In the standalone browser, Settings > Preview command does the same.
+- **Double-click** views when the command's program is on PATH; otherwise it plays the item in the details panel as before. The menu entries and the button always try, and a missing program is reported in the log with a hint.
+- Items qualify when they have something to play (a movie or GIF, or a `preview`).

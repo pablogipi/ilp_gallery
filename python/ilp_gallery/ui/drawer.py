@@ -231,6 +231,7 @@ class DrawerWidget(QWidget):
         self.path_key = path_key
         self.entry_factory: Callable[[GalleryItem], DrawerEntry | None] | None = None
         self._actions: list[tuple[str, Callable, bool]] = []   # add_action()
+        self.viewer: Callable[[list[DrawerEntry]], None] | None = None   # View / double-click
         self._current_key: str | None = None                    # set_current_key()
         self.name_format: NameFormat | None = None              # set_name_format()
         self.show_paths = True                                  # paths in tooltips
@@ -527,8 +528,14 @@ class DrawerWidget(QWidget):
         self.currentChanged.emit(self.resolver(e.key) if e is not None else None)
 
     def _show_entry(self, li: QListWidgetItem) -> None:
-        item = self.resolver(li.data(EntryRole).key)
-        if item is not None:
+        """Double-click: View the entry when a viewer is set, else show it in the gallery."""
+        entry = li.data(EntryRole)
+        item = self.resolver(entry.key)
+        if item is None:
+            return
+        if self.viewer is not None:
+            self._run_action(self.viewer, [entry])
+        else:
             self.showRequested.emit(item)
 
     def add_action(self, label: str, callback: Callable[[list[DrawerEntry]], None],
@@ -549,6 +556,10 @@ class DrawerWidget(QWidget):
             if single and len(entries) != 1:
                 continue
             menu.addAction(label, lambda cb=callback: self._run_action(cb, entries))
+        viewable = [e for e in entries if self.resolver(e.key) is not None]
+        if self.viewer is not None and viewable:
+            menu.addAction(f"View ({len(viewable)})" if len(viewable) > 1 else "View",
+                           lambda: self._run_action(self.viewer, viewable))
         if menu.actions():
             menu.addSeparator()
         outdated = [e.key for e in entries if self.state(e) == STATE_OUTDATED]

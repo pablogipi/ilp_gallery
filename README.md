@@ -113,7 +113,7 @@ The search field suggests completions for the word under the cursor (`her` offer
 - **Export log dock:** status, Stop export, Clear log.
 - **View menu:** toggle Categories / Details / Export log (Ctrl+1/2/3), tile sizes, Reload (F5).
 
-**Export** runs a command template once per asset, without a shell, streaming its output into the log. Set it in Settings or with `ILP_GALLERY_EXPORT_CMD`:
+**Export** runs a command template once per asset, through the shell, streaming its output into the log. Set it in Settings or with `ILP_GALLERY_EXPORT_CMD`:
 
 ```
 stockpile export --asset {asset_dir}
