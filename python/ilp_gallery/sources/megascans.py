@@ -466,6 +466,11 @@ class MegascansSource(JsonFileSource):
             log(f"Megascans: {n:,} assets ({n - reused:,} new or changed) from {self.root} "
                 f"in {time.perf_counter() - t:.1f} s")
 
+    @property
+    def rebuild_hint(self) -> str:
+        """How to bring an outdated cache up to date (shown in the gallery's log)."""
+        return f"ilp_gallery megascans -o {self.path}"
+
     def outdated(self, items) -> int:
         """How many items were written by an older importer version."""
         return sum(1 for it in items if it.metadata.get("importer_version") != IMPORTER_VERSION)

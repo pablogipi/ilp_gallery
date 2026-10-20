@@ -108,3 +108,51 @@ def test_megascans_records_list_renders_and_maps(tmp_path):
     assert ("Maps", "Albedo", "rmlkx2p_1K_Albedo.jpg") in got      # the 4K is over the limit, EXR skipped
     assert ("Maps", "Normal", "rmlkx2p_1K_Normal.jpg") in got
     assert (m["image_label"], m["image_group"]) == ("Render", "Renders")
+
+
+def test_no_paths_in_the_ui(app, tmp_path):
+    from ilp_gallery.media.thumbs import ThumbnailCache
+    from ilp_gallery.ui.widget import GalleryWidget
+    cache = ThumbnailCache(cache_dir=str(tmp_path / "c"))
+    g = GalleryWidget(cache=cache, show_paths=False)
+    recs = [make_record("/secret/dir/a.jpg", id="a", name="A")]
+    g.add_source(RecordsSource(lambda: recs, name="x"), background=False)
+    try:
+        g.set_export_enabled(True)
+        g.show()
+        g.details.set_item(next(iter(g.library)))
+        app.processEvents()
+        d = g.details
+        assert "Location" not in d.info.text() and "/secret" not in d.info.text()
+        assert not d.folder_btn.isVisibleTo(d) and not d.copy_btn.isVisibleTo(d)   # Copy path is a path
+        g.command_template = "echo {id}"                 # a command, not a path: offered again
+        assert d.copy_btn.isVisibleTo(d) and d.copy_btn.text() == "Copy command"
+    finally:
+        g.close()
+        cache.shutdown()
+
+
+def test_outdated_library_is_reported_once(app, tmp_path):
+    from ilp_gallery.media.thumbs import ThumbnailCache
+    from ilp_gallery.ui.widget import GalleryWidget
+
+    class Old(RecordsSource):
+        rebuild_hint = "rebuild-it --now"
+
+        def outdated(self, items):
+            return len(items)
+
+    cache = ThumbnailCache(cache_dir=str(tmp_path / "c"))
+    g = GalleryWidget(cache=cache)
+    seen = []
+    g.logMessage.connect(seen.append)
+    recs = [make_record(f"/x/{i}.jpg", id=f"i{i}", name="n") for i in range(3)]
+    src = Old(lambda: recs, name="old")
+    try:
+        g.add_source(src, background=False)
+        g.reload_source(src, background=False)
+        msgs = [m for m in seen if "older version" in m]
+        assert len(msgs) == 1 and "3 of 3" in msgs[0] and "rebuild-it --now" in msgs[0]
+    finally:
+        g.close()
+        cache.shutdown()

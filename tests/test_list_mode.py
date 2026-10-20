@@ -48,6 +48,10 @@ def test_switch_modes(app, tmp_path):
     w = make(app, tmp_path)
     try:
         assert w.view_mode() == "grid" and w.view.viewMode() == QListView.IconMode
+        w.set_tile_width(w.TILE_MIN)                     # small tiles: several per row
+        settle(app)
+        before = [w.view.visualRect(w.model.index(i, 0)) for i in (0, 1)]
+        assert before[1].left() > before[0].left()
         seen = []
         w.viewModeChanged.connect(seen.append)
         w.set_view_mode("list")
@@ -58,6 +62,9 @@ def test_switch_modes(app, tmp_path):
         assert r1.top() == r0.bottom() + 1 and r0.width() >= w.view.viewport().width() - 2   # full-width rows
         w.toggle_view_mode()
         assert w.view_mode() == "grid" and w.view.viewMode() == QListView.IconMode
+        settle(app)
+        after = [w.view.visualRect(w.model.index(i, 0)) for i in (0, 1)]
+        assert after == before                           # tiles side by side again, not one column
         with pytest.raises(ValueError):
             w.set_view_mode("table")
     finally:

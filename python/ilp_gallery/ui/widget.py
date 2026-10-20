@@ -509,6 +509,8 @@ class GalleryWidget(QWidget):
         self.tree.pathSelected.connect(self._on_user_category)
         self.size_slider.valueChanged.connect(lambda _v: changed())
         self.viewModeChanged.connect(lambda _m: changed())
+        self._outdated_told: set[str] = set()
+        self.sourceLoaded.connect(self._check_outdated)
         self.area.splitter.splitterMoved.connect(self._on_splitter_moved)
         self.area.column.splitterMoved.connect(self._on_splitter_moved)
         for pane in self.panes.values():
@@ -632,6 +634,25 @@ class GalleryWidget(QWidget):
         n = self.library.reload_source(src)
         self.sourceLoaded.emit(src, n)
         return n
+
+    def _check_outdated(self, src, n: int) -> None:
+        """Say so (once per source) when a source's items come from an older version
+        of its importer: newer features (e.g. the preview's Renders / Maps) need the
+        data rebuilt. Sources opt in with ``outdated(items) -> int`` and, optionally,
+        ``rebuild_hint``."""
+        check = getattr(src, "outdated", None)
+        if not callable(check) or src.name in self._outdated_told:
+            return
+        try:
+            k = check([it for it in self.library if it.source == src.name])
+        except Exception:
+            return
+        if k:
+            self._outdated_told.add(src.name)
+            hint = getattr(src, "rebuild_hint", "") or ""
+            self.logMessage.emit(f"{src.label}: {k:,} of {n:,} items were built by an older version of its "
+                                 "importer, so newer details are missing (e.g. the preview's Renders / Maps)."
+                                 + (f" Rebuild it: {hint}" if hint else ""))
 
     def is_loading(self) -> bool:
         return bool(self._loading)
@@ -1306,7 +1327,7 @@ class GalleryWidget(QWidget):
         if self.command_template:
             self.details.set_copy_label("Copy command", "Copy the export command for this item")
         else:
-            self.details.set_copy_label("Copy path", "Copy this item's path to the clipboard")
+            self.details.set_copy_label("Copy path", "Copy this item's path to the clipboard", needs_paths=True)
 
     # -- internals -------------------------------------------------------
     _default_action: ItemsCallback | None = None

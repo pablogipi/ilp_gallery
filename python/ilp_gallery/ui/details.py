@@ -175,7 +175,7 @@ class DetailPanel(QWidget):
     def set_export_enabled(self, on: bool, reason: str = "") -> None:
         self._export_on = on
         self.export_btn.setVisible(on)
-        self.copy_btn.setVisible(on)
+        self._update_copy_visible()
         self.more_btn.setVisible(on and self._more)
         self.export_btn.setToolTip(reason)
 
@@ -317,7 +317,16 @@ class DetailPanel(QWidget):
             return
         super().keyPressEvent(event)
 
-    def set_copy_label(self, label: str, tooltip: str) -> None:
+    _copy_needs_paths = False
+
+    def _update_copy_visible(self) -> None:
+        # "Copy path" is a path in the clipboard: not offered when paths are kept out of the UI
+        self.copy_btn.setVisible(self._export_on and (self.show_paths or not self._copy_needs_paths))
+
+    def set_copy_label(self, label: str, tooltip: str, needs_paths: bool = False) -> None:
+        """``needs_paths``: the button copies file paths (hidden with ``show_paths=False``)."""
+        self._copy_needs_paths = needs_paths
+        self._update_copy_visible()
         self.copy_btn.setText(label)
         self.copy_btn.setToolTip(tooltip)
 

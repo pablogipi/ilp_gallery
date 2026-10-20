@@ -51,6 +51,8 @@ class GalleryView(QListView):
             self.setGridSize(QSize())
         else:
             self.setViewMode(QListView.IconMode)
+            self.setFlow(QListView.LeftToRight)          # setViewMode keeps the list's flow and
+            self.setWrapping(True)                       # no-wrap: one column of tiles otherwise
             self.setSpacing(2)
         self.setMovement(QListView.Static)            # setViewMode resets it
         self.setResizeMode(QListView.Adjust)
