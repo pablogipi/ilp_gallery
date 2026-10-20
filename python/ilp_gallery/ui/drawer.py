@@ -454,12 +454,15 @@ class DrawerWidget(QWidget):
         for e in self._entries:
             item = self.resolver(e.key)
             state = entry_state(e, item, self.path_key)
-            li = QListWidgetItem(e.key)
+            name = item.name if item is not None else e.key   # the key can be an id ("id" drawers)
+            li = QListWidgetItem(name)
             li.setSizeHint(QSize(0, 31))
             li.setData(EntryRole, e)
             li.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
             li.setCheckState(Qt.Checked if e.enabled else Qt.Unchecked)
             tip = [f"Path: {e.path or '(none)'}"] if self.show_paths else []
+            if self.key != "name" and item is not None:
+                tip.insert(0, f"{self.key}: {e.key}")
             if state == STATE_OUTDATED:
                 outdated += 1
                 li.setForeground(OUTDATED_COLOR)
@@ -483,7 +486,7 @@ class DrawerWidget(QWidget):
                 li.setBackground(self._current_bg)
                 tip.append(self.current_label)
             enabled += e.enabled
-            li.setToolTip(tooltip_html(e.key, self.parts_for(e.key), tip))
+            li.setToolTip(tooltip_html(name, self.parts_for(e.key), tip))
             icon = self.icon_for(item)                   # None: missing from the library
             li.setIcon(icon if icon is not None else self._blank)
             self.list.addItem(li)

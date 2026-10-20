@@ -324,3 +324,23 @@ def test_media_published_after_the_data_is_picked_up(app, tmp_path):
                 and p.toImage().pixelColor(5, 5).green() > 200)
     w.close()
     cache.shutdown()
+
+
+def test_id_keyed_drawer_shows_names(app, tmp_path):
+    """Keyed by id (Megascans: many assets share a name), rows still read as names."""
+    from ilp_gallery.media.thumbs import ThumbnailCache
+    from ilp_gallery.ui.widget import GalleryWidget
+    cache = ThumbnailCache(cache_dir=str(tmp_path / "cache"))
+    w = GalleryWidget(cache=cache, drawer=True, drawer_key="id")
+    recs = [make_record(f"/ms/{i}.jpg", id=i, name="Modular Building Window") for i in ("ab12", "cd34")]
+    w.add_source(RecordsSource(lambda: recs, name="ms"), background=False)
+    w.show()
+    assert wait(app, lambda: len(w._drawer_index) == 2)
+    w.add_to_drawer(list(w._drawer_index.values()))
+    rows = [w.drawer.list.item(r) for r in range(w.drawer.list.count())]
+    assert [li.text() for li in rows] == ["Modular Building Window"] * 2
+    assert "id: ab12" in rows[0].toolTip() and "id: cd34" in rows[1].toolTip()
+    w.set_drawer(["gone99"])                        # missing entries fall back to the key
+    assert w.drawer.list.item(0).text() == "gone99"
+    w.close()
+    cache.shutdown()

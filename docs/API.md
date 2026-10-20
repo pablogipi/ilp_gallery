@@ -209,7 +209,7 @@ At 18,886 assets:
 | All assets in (background) | ~1.4 s |
 | Time the UI thread is blocked | ~8 ms |
 
-- **Compression** is what helps over the network. Name the file `.json.gz` and it's written and read gzip-compressed (`ilp-gallery megascans -o megascans.json.gz`).
+- **Compression** is what helps over the network. Name the file `.json.gz` and it's written and read gzip-compressed (`ilp_gallery megascans -o megascans.json.gz`).
 - **Detection:** any extension works, because files are recognised by their content.
 - **Search backend:** SQLite FTS5 when the host's `sqlite3` supports it. Otherwise (Nuke's bundled Python has no FTS5) a pure-Python index with the same queries, results and ranking takes over automatically. At 20k items it takes ~90 ms per query instead of ~10 ms. `ILP_GALLERY_SEARCH=fts5|python` forces one; `library.index.backend` says which is in use.
 - **Live rebuilds:** clients poll the file and reload when it's rebuilt, so rebuilding the cache on a schedule updates open galleries.

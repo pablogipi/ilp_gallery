@@ -1,7 +1,7 @@
 """Generate a small demo library (movies, GIFs, images + JSON) with ffmpeg.
 
     python examples/make_demo_library.py /tmp/gallery_demo
-    ilp-gallery /tmp/gallery_demo/library.json
+    ilp_gallery /tmp/gallery_demo/library.json
 """
 
 import json

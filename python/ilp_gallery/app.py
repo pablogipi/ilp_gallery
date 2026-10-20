@@ -1,10 +1,10 @@
 """Standalone app and CLI.
 
-    ilp-gallery library.json [more.json | folder ...]
-    ilp-gallery scan /path/to/media -o library.json   # build JSON from a folder tree
-    ilp-gallery megascans -o megascans.json           # build JSON from the Megascans downloads
-    ilp-gallery search library.json "tag:walk -loop"   # headless search, prints paths
-    ilp-gallery thumbs library.json                     # pre-generate thumbnails (farm-friendly)
+    ilp_gallery library.json [more.json | folder ...]
+    ilp_gallery scan /path/to/media -o library.json   # build JSON from a folder tree
+    ilp_gallery megascans -o megascans.json           # build JSON from the Megascans downloads
+    ilp_gallery search library.json "tag:walk -loop"   # headless search, prints paths
+    ilp_gallery thumbs library.json                     # pre-generate thumbnails (farm-friendly)
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def _cmd_thumbs(args) -> int:
     from .core.library import GalleryLibrary
     from .media.thumbs import DEFAULT_CACHE, generate
 
-    _app = QGuiApplication.instance() or QGuiApplication(["ilp-gallery", "-platform", "offscreen"])
+    _app = QGuiApplication.instance() or QGuiApplication(["ilp_gallery", "-platform", "offscreen"])
     lib = GalleryLibrary()
     for s in args.sources:
         lib.load(s)
@@ -117,7 +117,7 @@ def parse_args( argv: list[str] | None = None ):
     """Parse arguments
     """
     argv = sys.argv[1:] if argv is None else argv
-    parser = argparse.ArgumentParser(prog="ilp-gallery", description="Image / movie gallery")
+    parser = argparse.ArgumentParser(prog="ilp_gallery", description="Image / movie gallery")
     sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("scan", help="build a library JSON from a folder of media")

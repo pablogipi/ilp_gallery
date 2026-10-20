@@ -22,15 +22,15 @@ ilp_gallery.dcc   hosts: show(), show_maya(), Nuke panel, Houdini panel
 ```bash
 pip install -e ".[standalone,test]"         # or, with rez: rez-env ilp_gallery (puts python/ on PYTHONPATH)
 python examples/make_demo_library.py /tmp/gallery_demo
-ilp-gallery /tmp/gallery_demo/library.json
+ilp_gallery /tmp/gallery_demo/library.json
 ```
 
 Other commands:
 
 ```bash
-ilp-gallery scan /jobs/lib/clips -o clips.json        # JSON from a folder tree (folders -> categories)
-ilp-gallery search clips.json "tag:walk -loop"        # headless search, prints paths
-ilp-gallery thumbs clips.json --threads 8             # pre-generate thumbnails (e.g. on the farm)
+ilp_gallery scan /jobs/lib/clips -o clips.json        # JSON from a folder tree (folders -> categories)
+ilp_gallery search clips.json "tag:walk -loop"        # headless search, prints paths
+ilp_gallery thumbs clips.json --threads 8             # pre-generate thumbnails (e.g. on the farm)
 ```
 
 Requirements: Python 3.10+, PySide6 6.5+, and `ffmpeg`/`ffprobe` on `PATH` for movies (or set `ILP_GALLERY_FFMPEG` / `ILP_GALLERY_FFPROBE`).
@@ -68,8 +68,8 @@ Also handled:
 ## Megascans library
 
 ```bash
-ilp-gallery megascans -o /ice/resources/ASSET_LIB/megascans/gallery/megascans.json.gz   # .gz = compressed
-ilp-gallery /ice/resources/ASSET_LIB/megascans/gallery/megascans.json.gz
+ilp_gallery megascans -o /ice/resources/ASSET_LIB/megascans/gallery/megascans.json.gz   # .gz = compressed
+ilp_gallery /ice/resources/ASSET_LIB/megascans/gallery/megascans.json.gz
 ```
 
 The importer walks `Downloaded/{3d,3dplant,atlas,surface}/<asset>/<id>.json` (change the location with `--root` or `ILP_MEGASCANS_ROOT`) and builds one record per asset:
@@ -104,7 +104,7 @@ The search field suggests completions for the word under the cursor (`her` offer
 
 ## The browser window
 
-`ilp-gallery megascans.json` opens the full tool (`GalleryBrowser`):
+`ilp_gallery megascans.json` opens the full tool (`GalleryBrowser`):
 
 - **Category tree:** built from `assetCategories` (Surfaces › Rock › Cliff), with counts that follow the search. Search and tree combine: pick *Surfaces › Rock*, then type `moss`.
 - **Grid:** name and type under each tile.

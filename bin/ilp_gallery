@@ -1,0 +1,12 @@
+#!/usr/bin/env python
+"""ilp_gallery command-line tool (megascans, scan, search, thumbs, gui).
+
+Uses the first python on PATH, which in a rez env is the resolved one,
+and imports the package from PYTHONPATH.
+"""
+import sys
+
+from ilp_gallery.app import main
+
+if __name__ == "__main__":
+    sys.exit(main())
