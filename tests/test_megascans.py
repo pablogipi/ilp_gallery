@@ -46,7 +46,9 @@ def test_record_from_full_download(root):
     assert m["asset_dir"] == str(d) and m["megascans_type"] == "surface"
     assert m["tileable"] is True and m["scanArea"] == "0.29x0.29 m"
     assert "albedo" in m["maps"] and m["resolutions"][0] == "4096x4096"
-    assert rec["description"] == "mediterranean-forest, Southeast Asia"
+    assert rec["description"] == ""                                     # biome / region are tags now
+    assert "mediterranean-forest" in rec["tags"] and "Southeast Asia" in rec["tags"]
+    assert all(k not in ("Biome", "Region") for k, _v in m["display"])
 
 
 def test_thumbnail_fallbacks(root):
@@ -98,3 +100,24 @@ def test_scan_build_and_search(root, tmp_path):
     os.utime(j, (os.path.getmtime(j) + 10,) * 2)
     n, reused = megascans.build_library_json(str(out), root=str(root), threads=4)
     assert (n, reused) == (2, 1)
+
+
+
+def test_clean_display_drops_internal_and_raw_rows():
+    rows = [["Scan Area", "2x2 m"], ["Points", 4], ["UseBillboardMaterial", False],
+            ["Dimensions", [{"width": "1.01m", "length": "1.03m"}]],
+            ["LodDistance", "[{'distance': [{'lod': 0}]}]"], ["Region", "Asia"], ["Tileable", True],
+            ["Height", "0.028 m"]]
+    assert megascans.clean_display(rows) == [["Scan Area", "2x2 m"], ["Tileable", "Yes"], ["Height", "0.028 m"]]
+
+
+def test_old_caches_are_cleaned_on_load(tmp_path):
+    from ilp_gallery.core.source import write_json
+    cache = tmp_path / "ms.json"
+    rec = {"id": "a", "name": "Ginger Lily", "path": str(tmp_path / "a.jpg"), "description": "tropical, Asia",
+           "tags": ["lily"], "metadata": {"source": "megascans", "biome": "tropical", "region": "Asia",
+                                          "display": [["Points", 4], ["Region", "Asia"], ["Scan Area", "1 m"]]}}
+    write_json(str(cache), {"source": "megascans", "items": [rec]})
+    out = megascans.MegascansSource(cache=str(cache)).load()[0]
+    assert out["metadata"]["display"] == [["Scan Area", "1 m"]]
+    assert out["description"] == "" and {"tropical", "Asia"} <= set(out["tags"])

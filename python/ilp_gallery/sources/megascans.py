@@ -285,18 +285,16 @@ def asset_record(asset_dir: str, main_category: str) -> dict | None:
     def has_value(v):
         return v is not None and v != [] and str(v).strip().lower() not in EMPTY_VALUES
 
-    display = [[m.get("name") or m["key"], _pretty(m.get("value"))] for m in meta_list
-               if has_value(m.get("value"))]
+    display = clean_display([[m.get("name") or m["key"], m.get("value")] for m in meta_list
+                             if has_value(m.get("value"))])
     env = {k: v for k, v in (data.get("environment") or {}).items() if has_value(v)}
     maps = _dedupe([c.get("type") for c in data.get("components") or [] if c.get("type")])
     resolutions = sorted({r.get("resolution") for c in data.get("components") or []
                           for u in c.get("uris") or [] for r in u.get("resolutions") or []
                           if r.get("resolution")}, key=_area, reverse=True)
-    description = ", ".join(v for v in (env.get("biome"), env.get("region")) if v)
-    if env.get("biome"):
-        display.append(["Biome", env["biome"]])
-    if env.get("region"):
-        display.append(["Region", env["region"]])
+    # Biome and region: searchable tags, not rows of their own in the details pane
+    tags = _dedupe(tags + [str(v) for v in (env.get("biome"), env.get("region")) if v])
+    description = ""
 
     return {
         "id": asset_id,
@@ -354,6 +352,38 @@ def category_paths(asset_categories: Any, main_category: str) -> list[list[str]]
     # drop the uninformative "other" level Megascans uses a lot
     paths = [[p for i, p in enumerate(path) if not (i and p.lower() == "other")] for path in paths]
     return paths or [[main_category]]
+
+
+# meta entries that mean nothing to an artist picking an asset: store points, engine
+# flags, per-LOD and per-variation tables
+HIDDEN_DISPLAY = {"points", "usebillboardmaterial", "loddistance", "loddistances", "dimensions",
+                  "biome", "region"}
+
+
+def _structured(value: Any) -> bool:
+    """A dict, or a list holding dicts / lists: raw data, not something to read."""
+    if isinstance(value, dict):
+        return True
+    if isinstance(value, (list, tuple)):
+        return any(isinstance(v, (dict, list, tuple)) for v in value)
+    text = str(value).strip()
+    return text.startswith(("{", "[{", "[[")) or "{'" in text
+
+
+def clean_display(rows) -> list[list[str]]:
+    """The details pane's rows for an asset: hidden keys and raw structured values
+    dropped, the rest pretty-printed. Also run on libraries built by older imports."""
+    out = []
+    for row in rows or []:
+        try:
+            name, value = row
+        except (TypeError, ValueError):
+            continue
+        key = str(name).replace(" ", "").replace("_", "").lower()
+        if key in HIDDEN_DISPLAY or _structured(value):
+            continue
+        out.append([str(name), _pretty(value)])
+    return out
 
 
 def _pretty(value: Any) -> str:
@@ -456,6 +486,14 @@ class MegascansSource(JsonFileSource):
             self.rebuild()
         records = super().load()
         self.root = self.header.get("root") or self.root
+        for rec in records:                          # caches built before clean_display existed
+            m = rec.get("metadata") or {}
+            if "display" in m:
+                m["display"] = clean_display(m["display"])
+            env = [str(m[k]) for k in ("biome", "region") if m.get(k)]
+            if env and rec.get("description") == ", ".join(env):
+                rec["description"] = ""
+                rec["tags"] = _dedupe(list(rec.get("tags") or []) + env)
         return records
 
     def rebuild(self, progress=None, log=None) -> None:
