@@ -139,6 +139,17 @@ def _flat_arrow(direction, colour) -> str:
 
 # -- all pieces --------------------------------------------------------------------
 
+DEFAULT_RING = 5          # px from the default frame's edge to the button (frame 2 + gap 3)
+DEFAULT_SLICE = DEFAULT_RING + 3                 # + the button's own ring and bevel
+
+
+def _default(t, face, tl_out, tl_in, br_in, br_out) -> str:
+    n, o = 24, DEFAULT_RING
+    frame = bevel(n, n, t.bg, t.shadow, t.shadow2, t.hilite2, t.hilite)       # sunken
+    return svg(n, n, frame + [f"<g transform='translate({o},{o})'>"]
+               + bevel(n - 2 * o, n - 2 * o, face, tl_out, tl_in, br_in, br_out, ring=t.ring) + ["</g>"])
+
+
 def pieces(t) -> dict[str, str]:
     """name -> SVG text for every piece the SGI stylesheet uses."""
     hl, hl2, sh2, sh = t.hilite, t.hilite2, t.shadow2, t.shadow
@@ -149,11 +160,14 @@ def pieces(t) -> dict[str, str]:
         "raised": svg(12, 12, bevel(12, 12, face, hl, hl2, sh2, sh, ring=ring)),
         "raised_hover": svg(12, 12, bevel(12, 12, t.tile_hover, hl, hl2, sh2, sh, ring=ring)),
         "pressed": svg(12, 12, bevel(12, 12, t.pressed, sh, sh2, hl2, hl, ring=ring)),
-        "primary": svg(12, 12, bevel(12, 12, t.accent, t.accent_hl, t.accent_hl2, t.accent_sh2, t.accent_sh, ring=ring)),
-        "default": svg(20, 20, bevel(20, 20, t.bg, sh, sh2, hl2, hl) + [box.replace("1,1", "3,3")]
-                       + bevel(14, 14, face, hl, hl2, sh2, sh, ring=ring) + ["</g>"]),
+        # the default button, as Indigo Magic / Motif draw it: the usual button inside
+        # a sunken frame, with a gap of background between them (24x24, sliced 8px)
+        "default": _default(t, face, hl, hl2, sh2, sh),
+        "default_hover": _default(t, t.tile_hover, hl, hl2, sh2, sh),
+        "default_pressed": _default(t, t.pressed, sh, sh2, hl2, hl),
         "sunken": svg(12, 12, bevel(12, 12, well, sh, sh2, hl2, hl)),
-        "sunken_desktop": svg(12, 12, bevel(12, 12, t.desktop, sh, sh2, hl2, hl)),
+        "sunken_desktop": svg(12, 12, bevel(12, 12, getattr(t, "grid_bg", "") or t.desktop, sh, sh2, hl2, hl)),
+        "sunken_list": svg(12, 12, bevel(12, 12, getattr(t, "list_bg", "") or well, sh, sh2, hl2, hl)),
         "entry": svg(12, 12, bevel(12, 12, t.entry, sh, sh2, hl2, hl)),
         "panel": svg(12, 12, bevel(12, 12, t.bg, hl, hl2, sh2, sh)),
         "option": svg(14, 8, bevel(14, 8, face, hl, hl, sh, sh)),

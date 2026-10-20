@@ -19,6 +19,8 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QProxyStyle, QPushButton, QStyleFactory, QWidget
 
 from .theme import SGI, SGI_DARK, SGI_SLATE, SgiTheme, register_fonts
+from .. import theme as base
+from ..theme import italic_menu
 
 _MARKED = "ilpFusionStyled"          # dynamic property on widgets we restyled
 _style: QProxyStyle | None = None
@@ -82,7 +84,15 @@ QListView {{ background: {self.desktop}; }}
                 if w is not root:
                     w.setPalette(QPalette())                  # inherit again
 
+    ITALIC_TABS = False                               # Fusion look: the SGI tab slant stays with SGI
+    BOLD_TABS = False
+    TAB_SHAPE = "rounded"
+
+    def list_color(self, role: str):
+        return base.Theme.list_color(self, role)      # the SGI list-pane colours stay with SGI
+
     def polish_menu(self, menu) -> None:
+        italic_menu(menu)
         menu.setStyle(fusion_style())
         menu.setProperty(_MARKED, True)
         menu.setPalette(self.qpalette())

@@ -80,6 +80,14 @@ class SgiTheme(base.Theme):
     wheel_lo: str = ""     # near-black ends and grooves
     sb_arrow: str = ""     # scrollbar arrows (default: shadow)
     current: str = ""      # text of the current tab (default: text)
+    # Indigo Magic's file views: list panes (tree, drawer) in a deep colour, the
+    # icon area (the tiles' grid) lighter. Empty: well / text / muted / desktop.
+    grid_bg: str = ""      # behind the tiles
+    list_bg: str = ""      # tree and drawer
+    list_text: str = ""
+    list_muted: str = ""   # counts, missing entries
+    list_select_bg: str = ""
+    list_select_text: str = ""
     font_ui: str = '"IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif'
     font_mono: str = '"IBM Plex Mono", "Liberation Mono", Courier, monospace'
 
@@ -91,7 +99,22 @@ class SgiTheme(base.Theme):
         vals["current"] = self.current or self.text
         vals["disabled_text"] = base._hex(base._mix(QColor(self.text), QColor(self.bg), 0.55))
         vals["font_size"] = self.font_size or "9.5pt"
+        vals.update(self._list_vals())
         return _QSS.format(**vals)
+
+    def _list_vals(self) -> dict[str, str]:
+        list_bg = self.list_bg or self.well
+        return {
+            "grid_bg": self.grid_bg or self.desktop, "list_bg": list_bg,
+            "list_text": self.list_text or self.text,
+            "list_hover": base._hex(base._mix(QColor(list_bg), QColor(self.hilite), 0.18)),
+            "list_select_bg": self.list_select_bg or self.select_bg,
+            "list_select_text": self.list_select_text or self.select_text,
+        }
+
+    def list_color(self, role: str) -> QColor:
+        own = {"text": self.list_text, "muted": self.list_muted}.get(role)
+        return QColor(own) if own else super().list_color(role)
 
     def polish(self, root) -> None:
         style.apply_style(root)
@@ -99,7 +122,12 @@ class SgiTheme(base.Theme):
     def unpolish(self, root) -> None:
         style.remove_style(root)
 
+    ITALIC_TABS = True
+    BOLD_TABS = True
+    TAB_SHAPE = "sgi"
+
     def polish_menu(self, menu) -> None:
+        super().polish_menu(menu)
         style.install_menu_marks(menu)
 
     def tile_bevel(self):
@@ -111,6 +139,8 @@ SGI = SgiTheme(
     image_bg="#2c3a52", border="#8e8d88", text="#141414", muted="#55554f",
     accent="#cc1a1f", accent_hover="#dd2a2f", accent_text="#ffffff",
     select_bg="#8fa3c4", select_text="#0c0c0c", link="#1e3f8a", font_size="9.5pt",
+    grid_bg="#9fbfc0", list_bg="#4782b4", list_text="#0f2440", list_muted="#203f63",
+    list_select_bg="#5d94c4", list_select_text="#ffffff",
     desktop="#4b6b99", hilite="#fbfaf6", hilite2="#e2e1dc", shadow2="#9c9b96", shadow="#5e5d59",
     ring="#3c3c3a", pressed="#b8b7b2", well="#b4b3ae", entry="#d9aaa5", tab="#b4b3ae",
     title_bg="#b0afaa", accent_hl="#f08a85", accent_hl2="#e04a4c", accent_sh2="#a01015", accent_sh="#6e080b",
@@ -125,6 +155,8 @@ SGI_SLATE = SgiTheme(
     image_bg="#10151f", border="#4d5b75", text="#e4e8ef", muted="#9aa5b8",
     accent="#e8392f", accent_hover="#f24c42", accent_text="#ffffff",
     select_bg="#4a6a99", select_text="#ffffff", link="#9cc0f5", font_size="9.5pt",
+    grid_bg="#3f5876", list_bg="#1f3a62", list_text="#dfe7f3", list_muted="#8ea3c4",
+    list_select_bg="#33568a", list_select_text="#ffffff",
     desktop="#2a4166", hilite="#7488aa", hilite2="#526380", shadow2="#222b3a", shadow="#121821",
     ring="#0a0d13", pressed="#303b50", well="#222b3a", entry="#4f3a40", tab="#26303f",
     title_bg="#344058", accent_hl="#ff9b92", accent_hl2="#f5645a", accent_sh2="#a8221a", accent_sh="#6a120c",
@@ -142,6 +174,8 @@ SGI_DARK = SGI_SLATE.replace(
     border="#2d2d2d", text="#c4c4c4", muted="#888888",
     accent="#667cb6", accent_hover="#7890cc", accent_text="#ffffff",
     select_bg="#4f4f4f", select_text="#e6e6e6", link="#d2ad62",
+    grid_bg="#2a2a2a", list_bg="#171717", list_text="#c4c4c4", list_muted="#7a7a7a",
+    list_select_bg="#4f4f4f", list_select_text="#e6e6e6",
     desktop="#161616", hilite="#565656", hilite2="#444444", shadow2="#191919", shadow="#0e0e0e",
     ring="#0a0a0a", pressed="#2c2c2c", well="#1b1b1b", entry="#393c48", tab="#262626",
     title_bg="#2f2f2f", accent_hl="#9fb2e2", accent_hl2="#7f95cf", accent_sh2="#4a5c8e", accent_sh="#2a3456",
@@ -190,15 +224,25 @@ QPushButton:hover, QToolButton:hover, QComboBox:hover {{ border-image: url({img_
 QPushButton:pressed, QToolButton:pressed {{ border-image: url({img_pressed}) 3 3 3 3 stretch stretch;
     padding: 3px 11px 1px 13px; }}
 QWidget#ILPGalleryRoot QPushButton:disabled {{ color: {shadow2}; }}
-QPushButton:default {{ border-image: url({img_default}) 6 6 6 6 stretch stretch; border-width: 6px; padding: 0 9px; }}
-QPushButton#primary {{ border-image: url({img_primary}) 3 3 3 3 stretch stretch; color: {accent_text}; font-weight: 600; }}
-QWidget#ILPGalleryRoot QPushButton#primary:disabled {{ border-image: url({img_raised}) 3 3 3 3 stretch stretch; color: {shadow2}; }}
+QPushButton:default, QPushButton#primary {{ border-image: url({img_default}) 8 8 8 8 stretch stretch;
+    border-width: 8px; padding: 0 7px; }}
+QPushButton:default:hover, QPushButton#primary:hover {{ border-image: url({img_default_hover}) 8 8 8 8 stretch stretch; }}
+QPushButton:default:pressed, QPushButton#primary:pressed {{ border-image: url({img_default_pressed}) 8 8 8 8 stretch stretch;
+    padding: 1px 6px 0 8px; }}
+QWidget#ILPGalleryRoot QPushButton#primary:disabled {{ color: {shadow2}; }}
+QPushButton#primary[menuButton="true"] {{ border-image: url({img_raised}) 3 3 3 3 stretch stretch; border-width: 3px; }}
+QPushButton#primary[menuButton="true"]:hover {{ border-image: url({img_raised_hover}) 3 3 3 3 stretch stretch; }}
+QPushButton#primary[menuButton="true"]:pressed {{ border-image: url({img_pressed}) 3 3 3 3 stretch stretch; }}
 QToolButton {{ padding: 1px 4px; }}
 
 QComboBox {{ padding-right: 26px; font-style: italic; font-weight: 600; }}
 QComboBox::drop-down {{ border: none; width: 22px; subcontrol-position: center right; }}
 QComboBox::down-arrow {{ image: url({img_option}); width: 14px; height: 8px; }}
-QComboBox QAbstractItemView {{ background: {bg}; border: 2px solid {shadow}; selection-background-color: {select_bg}; }}
+QComboBox QAbstractItemView {{ background: {bg}; color: {text}; border: 2px solid {shadow}; border-image: none;
+    outline: 0; padding: 2px; }}
+QComboBox QAbstractItemView::item {{ padding: 0 10px; font-style: italic; font-weight: 600; }}
+QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected {{
+    background: {select_bg}; color: {select_text}; }}
 
 QCheckBox, QRadioButton {{ spacing: 6px; }}
 QCheckBox::indicator {{ width: 18px; height: 18px; image: url({img_check_off}); }}
@@ -211,19 +255,24 @@ QRadioButton::indicator:disabled {{ image: url({img_radio_dis}); }}
 QRadioButton::indicator:checked:disabled {{ image: url({img_radio_dis_on}); }}
 
 QTreeView {{
-    background: {well}; outline: 0; padding-top: 2px;
-    border-image: url({img_sunken}) 2 2 2 2 stretch stretch; border-width: 2px;
+    background: {list_bg}; color: {list_text}; outline: 0; padding-top: 2px;
+    border-image: url({img_sunken_list}) 2 2 2 2 stretch stretch; border-width: 2px;
     show-decoration-selected: 1;
 }}
 QTreeView::item {{ padding: 3px 2px; }}
-QTreeView::item:hover {{ background: {tile}; }}
-QTreeView::item:selected {{ background: {select_bg}; color: {select_text}; }}
+QTreeView::item:hover {{ background: {list_hover}; }}
+QTreeView::item:selected {{ background: {list_select_bg}; color: {list_select_text}; }}
 
-QListView {{ background: {desktop}; outline: 0; border-image: url({img_sunken_desktop}) 2 2 2 2 stretch stretch; border-width: 2px; }}
-QListWidget {{ background: {well}; outline: 0;
-    border-image: url({img_sunken}) 2 2 2 2 stretch stretch; border-width: 2px; }}
+QListView {{ background: {grid_bg}; outline: 0; border-image: url({img_sunken_desktop}) 2 2 2 2 stretch stretch; border-width: 2px; }}
+QListWidget {{ background: {list_bg}; color: {list_text}; outline: 0;
+    border-image: url({img_sunken_list}) 2 2 2 2 stretch stretch; border-width: 2px; }}
 QListWidget::item {{ padding: 1px 4px; }}
-QListWidget::item:selected {{ background: {accent}; color: {accent_text}; }}
+QAbstractItemView::indicator {{ width: 18px; height: 18px; image: url({img_check_off}); }}
+QAbstractItemView::indicator:checked {{ image: url({img_check_on}); }}
+QAbstractItemView::indicator:disabled {{ image: url({img_check_dis}); }}
+QAbstractItemView::indicator:checked:disabled {{ image: url({img_check_dis_on}); }}
+QListWidget::item:hover {{ background: {list_hover}; }}
+QListWidget::item:selected {{ background: {list_select_bg}; color: {list_select_text}; }}
 QScrollArea {{ background: {panel}; border: none; }}
 QScrollArea > QWidget > QWidget {{ background: {panel}; }}
 QWidget#details {{ background: {panel}; }}

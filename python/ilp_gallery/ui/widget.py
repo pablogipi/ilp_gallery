@@ -164,8 +164,8 @@ class GalleryWidget(QWidget):
                  view_command: str | None = None, view_field: str | None = None,
                  command_shell: bool = True,
                  **_ignored) -> None:
-        """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
-        standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
+        """``theme``: "auto" (default; match Houdini / Nuke / Maya, "fusion-dark"
+        standalone), "host", "sgi", "sgi-dark", "sgi-slate", "fusion",
         "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
         ``style``: "sgi" or "fusion" to draw an SGI palette in that widget style.
         ``drawer``: show the drawer pane; ``drawer_key`` is the record field that
@@ -375,6 +375,7 @@ class GalleryWidget(QWidget):
         self.cache.thumbnailReady.connect(self._on_thumb_ready)
         self.cache.mediaChanged.connect(self._on_media_changed)
         self.drawer.resolver = self._drawer_index.get
+        self.drawer.menu_polisher = lambda menu: self.theme.polish_menu(menu)
         self.drawer.by_id = self.library.get
         self._drawer_placeholder_icon = None
         self.drawer.icon_for = self._drawer_icon
@@ -449,11 +450,14 @@ class GalleryWidget(QWidget):
             self.setPalette(self.theme.qpalette())
             self.setStyleSheet(self.theme.stylesheet())
             self.theme.polish(self)
+            # Again: replacing a stylesheet restores the palette Qt saved before the
+            # first one, so switching themes live kept the previous background
+            self.setPalette(self.theme.qpalette())
             self._polished_theme = self.theme
         self.delegate.set_theme(self.theme)
         self.tree.set_theme(self.theme)
         self.details.set_theme(self.theme)
-        self.drawer.set_colors(self.theme.c("text"), self.theme.c("muted"), self.theme.c("accent"))
+        self.drawer.set_colors(self.theme.list_color("text"), self.theme.list_color("muted"), self.theme.c("accent"))
         self.area.set_theme(self.theme)
         self._drawer_placeholder_icon = None              # rebuilt in the new colours
         if hasattr(self, "drawer"):
@@ -826,6 +830,7 @@ class GalleryWidget(QWidget):
         ``"right"`` right-aligned (before any toolbar buttons). ``row=1`` uses a second
         row under the search bar instead, left to right in the order added (e.g. a
         host node's own controls)."""
+        self._polish_added(widget)
         if row == 1:
             if side not in ("left", "right"):
                 raise ValueError(f"side must be 'left' or 'right', not {side!r}")
@@ -911,8 +916,15 @@ class GalleryWidget(QWidget):
         b.setToolTip(tooltip)
         b.setCursor(Qt.PointingHandCursor)
         b.clicked.connect(callback)
+        self._polish_added(b)
         self.toolbar.addWidget(b)
         return b
+
+    def _polish_added(self, widget: QWidget) -> None:
+        """Theme a widget added after the gallery was built (the Fusion and SGI
+        themes style widgets one by one, so later ones would keep the app's look)."""
+        if self._styled_root and getattr(self, "_polished_theme", None) is not None:
+            self.theme.polish(widget)
 
     # ---------------------------------------------------------------- main action label
     def export_label(self) -> str:

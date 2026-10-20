@@ -116,8 +116,8 @@ class LogPanel(QWidget):
 class GalleryBrowser(QMainWindow):
     def __init__(self, parent: QWidget | None = None, theme: "theme_mod.Theme | str | None" = None,
                  style: str | None = None, **widget_kwargs) -> None:
-        """``theme``: "auto" (default; match Houdini / Nuke / Maya, ILP look
-        standalone), "host", "ilp", "sgi", "sgi-dark", "sgi-slate", "fusion",
+        """``theme``: "auto" (default; match Houdini / Nuke / Maya, "fusion-dark"
+        standalone), "host", "sgi", "sgi-dark", "sgi-slate", "fusion",
         "fusion-dark", "fusion-slate" or a :class:`~ilp_gallery.ui.theme.Theme`.
         ``style``: "sgi" or "fusion" to draw an SGI palette in that widget style."""
         super().__init__(parent)
@@ -287,6 +287,7 @@ class GalleryBrowser(QMainWindow):
         self.setPalette(t.qpalette())
         self.setStyleSheet(t.stylesheet())
         t.polish(self)                  # e.g. the SGI theme's proxy style and menu marks
+        self.setPalette(t.qpalette())   # again: a new stylesheet restores the old palette
         self._polished_theme = t
 
     def showEvent(self, event) -> None:

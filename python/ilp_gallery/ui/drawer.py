@@ -234,6 +234,7 @@ class DrawerWidget(QWidget):
         self.viewer: Callable[[list[DrawerEntry]], None] | None = None   # View / double-click
         self._current_key: str | None = None                    # set_current_key()
         self.name_format: NameFormat | None = None              # set_name_format()
+        self.menu_polisher: Callable[[QMenu], None] | None = None  # the gallery's theme
         self.show_paths = True                                  # paths in tooltips
         self._current_bg = QColor(70, 130, 220, 60)
         self.current_label = "Current"                          # tooltip line for it
@@ -555,6 +556,8 @@ class DrawerWidget(QWidget):
             return None
         entries = [e for e in self._entries if e.key in set(keys)]
         menu = QMenu(self)
+        if self.menu_polisher is not None:
+            self.menu_polisher(menu)
         for label, callback, single in self._actions:
             if single and len(entries) != 1:
                 continue

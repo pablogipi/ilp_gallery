@@ -222,21 +222,21 @@ At 18,886 assets:
 
 ## 8. Look
 
-By default the gallery matches the application it runs in. Inside Houdini it reads Houdini's colour scheme (`hou.qt.getColor`: background, text, buttons), since Houdini's Qt palette doesn't follow schemes like Houdini Light. In Nuke and Maya it derives the colours from the host's Qt palette. Either way it keeps the host's font size, and it follows the host when its colours change: on a palette change, and whenever the panel is shown. Standalone, it uses the built-in ILP look.
+By default the gallery matches the application it runs in. Inside Houdini it reads Houdini's colour scheme (`hou.qt.getColor`: background, text, buttons), since Houdini's Qt palette doesn't follow schemes like Houdini Light. In Nuke and Maya it derives the colours from the host's Qt palette. Either way it keeps the host's font size, and it follows the host when its colours change: on a palette change, and whenever the panel is shown. Standalone, it uses `"fusion-dark"`. (The old `"ilp"` look is retired; asking for it gives `"fusion-dark"`.)
 
 The derived colours are sanity-checked: panels stay on the same side of light/dark as the window, and text, selected rows and links keep readable contrast, whatever the host reports.
 
 ```python
-from ilp_gallery.ui import ILP, Theme
+from ilp_gallery.ui.sgi import FUSION_DARK
 
-make_browser(theme="auto")                          # default: host look in a DCC, ILP standalone
+make_browser(theme="auto")                          # default: host look in a DCC, fusion-dark standalone
 make_browser(theme="host")                          # always derive from the app's palette
-make_browser(theme="ilp")                           # always the ILP look
-make_browser(theme=ILP.replace(accent="#e08a3d"))   # any Theme; .replace() changes a few colours
-browser.set_theme("ilp")                            # switch live
+make_browser(theme="sgi-dark")                      # always that look
+make_browser(theme=FUSION_DARK.replace(accent="#e08a3d"))   # any Theme; .replace() changes a few colours
+browser.set_theme("sgi")                            # switch live
 ```
 
-`ILP_GALLERY_THEME=auto|host|ilp` overrides what `"auto"` picks; an explicit `theme=` argument still wins. `browser.theme` is the `Theme` in use. `gallery.refresh_theme()` re-reads the host's colours by hand, and `gallery.themeChanged` fires with the new `Theme`.
+`ILP_GALLERY_THEME=auto|host|sgi|...` overrides what `"auto"` picks; an explicit `theme=` argument still wins. `browser.theme` is the `Theme` in use. `gallery.refresh_theme()` re-reads the host's colours by hand, and `gallery.themeChanged` fires with the new `Theme`.
 
 > Houdini Light was checked against values reported from a real session; the Nuke and Maya looks with palettes like theirs.
 

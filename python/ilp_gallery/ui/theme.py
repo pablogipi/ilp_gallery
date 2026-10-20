@@ -5,19 +5,21 @@ into the gallery's stylesheet and the tile / tree / details painters read the
 same object. Pick one with ``theme=`` on GalleryBrowser / GalleryWidget /
 ``dcc.make_browser`` / ``dcc.show``:
 
-* ``"auto"`` (default): match the host inside Houdini, Nuke or Maya, the
-  ILP look standalone.
+* ``"auto"`` (default): match the host inside Houdini, Nuke or Maya,
+  ``"fusion-dark"`` standalone.
 * ``"host"``: derive the colours from the host: its colour scheme in Houdini
   (``hou.qt.getColor``), the running application's QPalette elsewhere.
   "auto" and "host" follow the host when its colours change.
-* ``"ilp"``: the built-in ILP look.
 * ``"sgi"``, ``"sgi-dark"``, ``"sgi-slate"``: the SGI / IRIX look
   (see :mod:`ilp_gallery.ui.sgi`); ``"fusion"``, ``"fusion-dark"``,
   ``"fusion-slate"``: the same palettes in Qt's Fusion style. ``style="fusion"``
   or ``style="sgi"`` picks the widget style for any of these palettes.
-* a :class:`Theme`, e.g. ``ILP.replace(accent="#e08a3d")``.
+* a :class:`Theme`, e.g. ``FUSION_DARK.replace(accent="#e08a3d")``.
 
-The environment variable ``ILP_GALLERY_THEME=auto|host|ilp|sgi|...`` overrides the
+``"ilp"``, the old standalone look, is retired: it now gives ``"fusion-dark"``.
+(:data:`ILP` is still there as the placeholder colours widgets start with.)
+
+The environment variable ``ILP_GALLERY_THEME=auto|host|sgi|...`` overrides the
 default for "auto".
 """
 
@@ -53,6 +55,11 @@ class Theme:
     def c(self, role: str) -> QColor:
         return QColor(getattr(self, role))
 
+    def list_color(self, role: str) -> QColor:
+        """``"text"`` or ``"muted"`` for rows in the list panes (tree, drawer); a
+        theme can give those panes their own colours (the SGI themes do)."""
+        return self.c(role)
+
     def replace(self, **changes) -> "Theme":
         return dataclasses.replace(self, **changes)
 
@@ -83,8 +90,15 @@ class Theme:
     def unpolish(self, root) -> None:
         """Undo :meth:`polish` when ``root`` switches to another theme."""
 
+    #: pane tab titles in italics (the SGI themes, like IRIX's tabs)
+    ITALIC_TABS = False
+    BOLD_TABS = False         #: and in bold (SGI: bold italic, like IRIX's tabs)
+    TAB_SHAPE = "rounded"     #: pane tabs: "rounded", or "sgi" (IRIX notebook tabs)
+
     def polish_menu(self, menu) -> None:
-        """Called for drop-down / context menus the gallery creates."""
+        """Called for drop-down / context menus the gallery creates: italic items
+        in every theme, submenus included."""
+        italic_menu(menu)
 
     def tile_bevel(self):
         """(light, light2, dark2, dark) QColors to bevel the tiles with, or None."""
@@ -245,6 +259,28 @@ def detect_host() -> str:
     return "standalone"
 
 
+#: the theme "auto" picks outside Houdini / Nuke / Maya
+STANDALONE_DEFAULT = "fusion-dark"
+
+
+def italic_menu(menu) -> None:
+    """Italic items for ``menu`` and, as they open, its submenus. A font set on the
+    menu itself survives host stylesheets (Houdini's) that only set size or family;
+    submenus are popups of their own and don't inherit it, hence the hook."""
+    from PySide6.QtGui import QFont
+    f = QFont(menu.font())
+    f.setItalic(True)
+    menu.setFont(f)
+    if not menu.property("_ilpItalicHook"):
+        menu.setProperty("_ilpItalicHook", True)
+
+        def subs():
+            for a in menu.actions():
+                if a.menu() is not None:
+                    italic_menu(a.menu())
+        menu.aboutToShow.connect(subs)
+
+
 def resolve(theme: "Theme | str | None" = None, style: str | None = None) -> Theme:
     """Turn ``theme=`` (and optionally ``style=``) arguments into a Theme
     (see the module docstring)."""
@@ -262,16 +298,16 @@ def _resolve_theme(theme: "Theme | str | None") -> Theme:
     if choice == "auto":
         choice = os.environ.get("ILP_GALLERY_THEME", "auto").strip().lower() or "auto"
     if choice == "auto":
-        choice = "ilp" if detect_host() == "standalone" else "host"
+        choice = STANDALONE_DEFAULT if detect_host() == "standalone" else "host"
     if choice == "host":
         return host_theme()
-    if choice == "ilp":
-        return ILP
+    if choice == "ilp":                                  # retired, see the module docstring
+        choice = STANDALONE_DEFAULT
     if choice.startswith(("sgi", "fusion")):
         from .sgi import PRESETS
         if choice in PRESETS:
             return PRESETS[choice]
-    raise ValueError(f"Unknown theme {theme!r}: use 'auto', 'host', 'ilp', 'sgi', 'sgi-dark', "
+    raise ValueError(f"Unknown theme {theme!r}: use 'auto', 'host', 'sgi', 'sgi-dark', "
                      "'sgi-slate', 'fusion', 'fusion-dark', 'fusion-slate' or a Theme")
 
 

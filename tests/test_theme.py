@@ -1,4 +1,4 @@
-"""Theme: the ILP look standalone, the host's palette inside Houdini / Nuke / Maya."""
+"""Theme: fusion-dark standalone, the host's palette inside Houdini / Nuke / Maya."""
 
 import os
 import sys
@@ -56,17 +56,19 @@ def test_ilp_theme_is_backwards_compatible():
 
 
 def test_resolve(app):
-    assert theme.resolve("ilp") is theme.ILP
+    from ilp_gallery.ui.sgi import FUSION_DARK
+    assert theme.resolve("ilp") is FUSION_DARK          # retired: the standalone default now
     custom = theme.ILP.replace(accent="#e08a3d")
     assert theme.resolve(custom) is custom
     with pytest.raises(ValueError):
         theme.resolve("purple")
 
 
-def test_auto_is_ilp_standalone(app):
+def test_auto_is_fusion_dark_standalone(app):
+    from ilp_gallery.ui.sgi import FUSION_DARK
     assert theme.detect_host() == "standalone"
-    assert theme.resolve() is theme.ILP
-    assert theme.resolve("auto") is theme.ILP
+    assert theme.resolve() is FUSION_DARK
+    assert theme.resolve("auto") is FUSION_DARK
 
 
 def test_auto_matches_host(host_palette):
@@ -80,8 +82,8 @@ def test_auto_matches_host(host_palette):
 
 
 def test_env_overrides_auto(host_palette, monkeypatch):
-    monkeypatch.setenv("ILP_GALLERY_THEME", "ilp")
-    assert theme.resolve() is theme.ILP
+    monkeypatch.setenv("ILP_GALLERY_THEME", "sgi-dark")
+    assert theme.resolve().name == "sgi-dark"
     assert theme.resolve("host").name == "host:nuke"   # explicit argument still wins
 
 
@@ -102,7 +104,7 @@ def test_browser_uses_host_look_and_switches_live(host_palette):
         assert b.theme.name == "host:nuke"
         assert "#f7931e" in b.styleSheet()
         assert b.gallery.delegate._accent == QColor("#f7931e")
-        b.set_theme("ilp")
+        b.set_theme(theme.ILP)
         assert b.theme is theme.ILP
         assert theme.ILP.accent in b.styleSheet()
         assert b.gallery.delegate._accent == QColor(theme.ILP.accent)
@@ -195,7 +197,7 @@ def test_panel_never_mixes_light_and_dark():
 def test_follows_host_palette_changes(host_palette, app):
     from ilp_gallery.ui import GalleryBrowser
     b = GalleryBrowser()
-    fixed = GalleryBrowser(theme="ilp")
+    fixed = GalleryBrowser(theme=theme.ILP)
     try:
         b.show()
         fixed.show()

@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QFontMetricsF, QPainter, QPalette
-from PySide6.QtWidgets import QApplication, QMenu, QProxyStyle, QStyle, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QMenu, QProxyStyle, QStyle, QStyledItemDelegate, QWidget,
+)
 
 _MARKED = "ilpSgiStyled"           # dynamic property on widgets we restyled
 
@@ -158,6 +160,34 @@ def install_menu_marks(menu: QMenu) -> None:
 
 # -- apply / remove ------------------------------------------------------------------
 
+# Combo popups: Qt paints them with an internal menu delegate the stylesheet can't
+# reach (no theme colours, no hover). A QStyledItemDelegate makes the
+# "QComboBox QAbstractItemView" rules apply; the original comes back on removal.
+_combo_delegates: dict[int, object] = {}
+COMBO_ROW = 22                                   # popup row height (stylesheet heights don't reach the layout)
+
+
+class _ComboDelegate(QStyledItemDelegate):
+    def sizeHint(self, option, index):
+        s = super().sizeHint(option, index)
+        s.setHeight(max(s.height(), COMBO_ROW))
+        return s
+
+
+def _style_combo(combo: QComboBox) -> None:
+    if id(combo) in _combo_delegates:
+        return
+    _combo_delegates[id(combo)] = combo.itemDelegate()      # kept alive: Qt doesn't delete it
+    combo.setItemDelegate(_ComboDelegate(combo))
+    combo.destroyed.connect(lambda *_a, k=id(combo): _combo_delegates.pop(k, None))
+
+
+def _unstyle_combo(combo: QComboBox) -> None:
+    old = _combo_delegates.pop(id(combo), None)
+    if old is not None:
+        combo.setItemDelegate(old)
+
+
 def apply_style(root: QWidget) -> None:
     """Apply the SGI proxy style to ``root`` and everything under it (menus included)."""
     style = proxy_style()
@@ -167,6 +197,8 @@ def apply_style(root: QWidget) -> None:
         elif not w.property(_MARKED):
             w.setStyle(style)
             w.setProperty(_MARKED, True)
+        if isinstance(w, QComboBox):
+            _style_combo(w)
 
 
 def remove_style(root: QWidget) -> None:
@@ -176,5 +208,7 @@ def remove_style(root: QWidget) -> None:
             continue
         if isinstance(w, QMenu) and _menu_marks is not None:
             w.removeEventFilter(_menu_marks)
+        if isinstance(w, QComboBox):
+            _unstyle_combo(w)
         w.setStyle(None)
         w.setProperty(_MARKED, False)

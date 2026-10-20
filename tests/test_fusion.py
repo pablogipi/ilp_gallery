@@ -55,7 +55,7 @@ def test_style_errors():
     with pytest.raises(ValueError):
         theme.resolve("sgi", style="plastique")
     with pytest.raises(ValueError):
-        theme.resolve("ilp", style="fusion")        # Fusion looks use the SGI palettes
+        theme.resolve(theme.ILP, style="fusion")    # Fusion looks use the SGI palettes
 
 
 def test_env_selects_fusion(monkeypatch):
@@ -91,7 +91,7 @@ def test_browser_in_fusion(app):
 
 def test_cycle_all_six_looks_and_back(app):
     from ilp_gallery.ui import GalleryBrowser
-    b = GalleryBrowser(theme="ilp")
+    b = GalleryBrowser(theme=theme.ILP)          # a plain (non SGI) Theme
     try:
         b.show()
         export = b.gallery.details.export_btn
@@ -106,7 +106,7 @@ def test_cycle_all_six_looks_and_back(app):
                 assert b.gallery.tree.palette().color(QPalette.Base) == QColor(b.theme.well), (name, style)
                 assert b.gallery.log_view.palette().color(QPalette.Base) == QColor(b.theme.well) \
                     if hasattr(b.gallery, "log_view") else True
-        b.set_theme("ilp")
+        b.set_theme(theme.ILP)
         app.processEvents()
         assert restyled(b, fusion_mod._MARKED) == [] and restyled(b, SGI_MARK) == []
         assert not isinstance(b.gallery.tree.style(), QtWidgets.QProxyStyle)

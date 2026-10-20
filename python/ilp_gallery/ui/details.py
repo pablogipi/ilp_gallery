@@ -62,6 +62,7 @@ class DetailPanel(QWidget):
         self.export_btn = QPushButton("Export", objectName="primary")
         self.more_btn = QPushButton("▾", objectName="primary")
         self.more_btn.setFixedWidth(24)
+        self.more_btn.setProperty("menuButton", True)   # SGI: plain, the ring is Export's
         self.more_btn.setStyleSheet("padding: 5px 0px;")
         self.more_btn.setToolTip("Other exporters")
         self.more_btn.setVisible(False)

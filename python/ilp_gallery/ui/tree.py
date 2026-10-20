@@ -132,7 +132,7 @@ class CategoryTree(QTreeView):
         count = QStandardItem("")
         count.setData(path, PathRole)
         count.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        count.setForeground(self._theme.c("muted"))
+        count.setForeground(self._theme.list_color("muted"))
         if bold or italic:
             f = name.font()
             f.setBold(bold)
@@ -163,7 +163,7 @@ class CategoryTree(QTreeView):
             count = QStandardItem("")
             count.setData(path, PathRole)
             count.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            count.setForeground(self._theme.c("muted"))
+            count.setForeground(self._theme.list_color("muted"))
             root.insertRow(len(self._special), [name, count])
             self._rows[path] = (name, count)
         self.update_counts(self._visible)
@@ -183,7 +183,7 @@ class CategoryTree(QTreeView):
     def update_counts(self, visible: set[str] | None) -> None:
         """``visible`` = ids matching the search (None = no search: full counts)."""
         self._visible = visible
-        muted, text = self._theme.c("muted"), self._theme.c("text")
+        muted, text = self._theme.list_color("muted"), self._theme.list_color("text")
         for path, (name, count) in self._rows.items():
             members = self.ids.get(path) if path else None
             if path == ():
@@ -197,7 +197,7 @@ class CategoryTree(QTreeView):
 
     def set_theme(self, t: theme.Theme) -> None:
         self._theme = t
-        muted = t.c("muted")
+        muted = t.list_color("muted")
         for _name, count in self._rows.values():
             count.setForeground(muted)
         self.update_counts(self._visible)
