@@ -208,7 +208,10 @@ class PlayerWidget(QWidget):
             QShortcut(QKeySequence(key), self, fn, context=Qt.WidgetWithChildrenShortcut)
 
     # -- public --------------------------------------------------------
-    def set_item(self, item: GalleryItem | None, autoplay: bool = True) -> None:
+    def set_item(self, item: GalleryItem | None, autoplay: bool = True, keep_image: bool = False) -> None:
+        """``keep_image``: for a still image, keep showing the current picture until
+        the new one has loaded (the details pane's render arrows), instead of the
+        item's cached poster."""
         self.stop()
         self.info_lbl.setVisible(False)
         self.item = item
@@ -245,8 +248,9 @@ class PlayerWidget(QWidget):
         else:
             for w in self._controls:
                 w.setVisible(False)
-            self.canvas.set_image(None)
-            self._show_first_poster()  # instant, from the thumbnail cache
+            if not keep_image:
+                self.canvas.set_image(None)
+                self._show_first_poster()  # instant, from the thumbnail cache
             self.info_lbl.setText("")
             self._pool.start(_ImageJob(item.path, 2048, self._img_signals))
 

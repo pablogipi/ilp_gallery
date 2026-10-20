@@ -116,6 +116,10 @@ class SgiTheme(base.Theme):
         own = {"text": self.list_text, "muted": self.list_muted}.get(role)
         return QColor(own) if own else super().list_color(role)
 
+    def list_selection(self) -> tuple[QColor, QColor]:
+        return (QColor(self.list_select_bg or self.select_bg),
+                QColor(self.list_select_text or self.select_text))
+
     def polish(self, root) -> None:
         style.apply_style(root)
 
@@ -234,6 +238,11 @@ QPushButton#primary[menuButton="true"] {{ border-image: url({img_raised}) 3 3 3 
 QPushButton#primary[menuButton="true"]:hover {{ border-image: url({img_raised_hover}) 3 3 3 3 stretch stretch; }}
 QPushButton#primary[menuButton="true"]:pressed {{ border-image: url({img_pressed}) 3 3 3 3 stretch stretch; }}
 QToolButton {{ padding: 1px 4px; }}
+QPushButton#sizeReset {{ padding: 0; min-height: 0; }}
+QPushButton[squareTool="true"] {{ padding: 0; min-width: 16px; max-width: 16px; min-height: 16px; max-height: 16px; }}
+QPushButton[imageGroup="true"]:checked {{ border-image: url({img_pressed}) 3 3 3 3 stretch stretch;
+    padding: 3px 11px 1px 13px; font-weight: 600; }}
+QPushButton#sizeReset:pressed, QPushButton[squareTool="true"]:pressed {{ padding: 1px 0 0 1px; }}
 
 QComboBox {{ padding-right: 26px; font-style: italic; font-weight: 600; }}
 QComboBox::drop-down {{ border: none; width: 22px; subcontrol-position: center right; }}
@@ -264,6 +273,7 @@ QTreeView::item:hover {{ background: {list_hover}; }}
 QTreeView::item:selected {{ background: {list_select_bg}; color: {list_select_text}; }}
 
 QListView {{ background: {grid_bg}; outline: 0; border-image: url({img_sunken_desktop}) 2 2 2 2 stretch stretch; border-width: 2px; }}
+QListView[listMode="true"] {{ background: {list_bg}; border-image: url({img_sunken_list}) 2 2 2 2 stretch stretch; }}
 QListWidget {{ background: {list_bg}; color: {list_text}; outline: 0;
     border-image: url({img_sunken_list}) 2 2 2 2 stretch stretch; border-width: 2px; }}
 QListWidget::item {{ padding: 1px 4px; }}

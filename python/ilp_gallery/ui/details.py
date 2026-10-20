@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import os
 
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
-from ..core.item import GalleryItem
+from ..core.item import MEDIA_IMAGE, GalleryItem
 from . import theme
 from .delegate import subtitle
 from .names import format_name
@@ -21,6 +22,7 @@ from .tree import display_name, item_paths
 HIDDEN_META = {
     "source", "importer_version", "tile_aspect", "type_label", "category", "category_paths", "display",
     "asset_dir", "json", "json_mtime", "maps", "resolutions", "megascans_type",
+    "images", "image_label", "image_group",          # the preview pane's own fields
 }
 
 
@@ -52,6 +54,37 @@ class DetailPanel(QWidget):
         self.player.canvas.background = self._theme.c("image_bg")
         self.player.setMinimumHeight(260)
         self.player.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # More images of the item (metadata["images"], e.g. Megascans' Clay and
+        # Tiled renders): arrows under the preview, as in Quixel Bridge.
+        # (path or None for the item's own preview, label, group); the arrows step
+        # through the current group's images, one button per group switches group
+        self._images: list[tuple[str | None, str, str]] = []
+        self._image_index = 0                                # within the current group
+        self._group = ""
+        self._group_btns: dict[str, QPushButton] = {}
+        self.images_bar = QWidget(objectName="imagesBar")
+        bar = QHBoxLayout(self.images_bar)
+        bar.setContentsMargins(0, 4, 0, 2)
+        bar.setSpacing(4)
+        self.image_prev = QPushButton("‹", objectName="flat")
+        self.image_next = QPushButton("›", objectName="flat")
+        for b, tip in ((self.image_prev, "Previous image (Left)"), (self.image_next, "Next image (Right)")):
+            b.setProperty("squareTool", True)            # no padding: the SGI button rule hid the arrow
+            b.setFixedSize(22, 22)
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+        self.image_label = QLabel("", objectName="muted")
+        self._group_lay = QHBoxLayout()
+        self._group_lay.setSpacing(2)
+        bar.addLayout(self._group_lay)
+        bar.addSpacing(6)
+        bar.addWidget(self.image_label)
+        bar.addStretch(1)
+        bar.addWidget(self.image_prev)
+        bar.addWidget(self.image_next)
+        self.images_bar.hide()
+        self.image_prev.clicked.connect(lambda: self.step_image(-1))
+        self.image_next.clicked.connect(lambda: self.step_image(1))
 
         self.title = QLabel("", objectName="title")
         self.title.setWordWrap(True)
@@ -126,6 +159,7 @@ class DetailPanel(QWidget):
         lay.setContentsMargins(8, 8, 8, 0)
         lay.setSpacing(0)
         lay.addWidget(self.player, 5)
+        lay.addWidget(self.images_bar)
         lay.addWidget(scroll, 6)
         lay.addWidget(self.empty, 1)
 
@@ -171,6 +205,7 @@ class DetailPanel(QWidget):
             b.setEnabled(has)
         self.folder_btn.setVisible(self.show_paths)            # also before anything is selected
         self.player.set_item(item.motion_item() if item is not None else None, autoplay=autoplay)
+        self._set_images(item)
         self.preview_btn.setVisible(self._preview_on and item is not None and self.can_preview(item))
         if not has:
             self.title.setText("Select an asset to see its details.")
@@ -196,6 +231,91 @@ class DetailPanel(QWidget):
             self.sub.setText(f"{ident}   {subtitle(item)}".strip())
         self.sub.setVisible(bool(self.sub.text()))
         self.info.setText(self._html(item))
+
+    # -- more images ---------------------------------------------------------
+    def _set_images(self, item: GalleryItem | None) -> None:
+        """The item's images: its own preview, then ``metadata["images"]`` entries,
+        ``{"path", "label", "group"}`` dicts or bare paths. ``image_label`` and
+        ``image_group`` name the item's own preview."""
+        self._images, self._image_index = [], 0
+        if item is not None:
+            m = item.metadata
+            own_group = str(m.get("image_group") or "")
+            self._images.append((None, str(m.get("image_label") or ""), own_group))
+            for entry in m.get("images") or ():
+                if isinstance(entry, dict) and entry.get("path"):
+                    self._images.append((str(entry["path"]), str(entry.get("label") or ""),
+                                         str(entry.get("group") or own_group)))
+                elif isinstance(entry, str) and entry:
+                    self._images.append((entry, "", own_group))
+        groups = list(dict.fromkeys(g for _p, _l, g in self._images))
+        self._group = groups[0] if groups else ""
+        for b in self._group_btns.values():
+            b.deleteLater()
+        self._group_btns = {}
+        if len(groups) > 1:                              # one button per group: Renders / Maps
+            for g in groups:
+                b = QPushButton(g or "Images", objectName="flat", checkable=True)
+                b.setProperty("imageGroup", True)          # the themes style the checked group
+                b.setCursor(Qt.PointingHandCursor)
+                b.clicked.connect(lambda _c=False, g=g: self.set_image_group(g))
+                self._group_lay.addWidget(b)
+                self._group_btns[g] = b
+        self.images_bar.setVisible(len(self._images) > 1)
+        self._update_image_label()
+
+    def _group_images(self) -> list[tuple[str | None, str, str]]:
+        return [im for im in self._images if im[2] == self._group]
+
+    def image_count(self, group: str | None = None) -> int:
+        """Images of ``group`` (default: all), the item's own preview included."""
+        return len(self._images) if group is None else sum(1 for im in self._images if im[2] == group)
+
+    def image_groups(self) -> list[str]:
+        return list(dict.fromkeys(g for _p, _l, g in self._images))
+
+    def set_image_group(self, group: str) -> None:
+        """Switch to ``group``'s images (e.g. "Maps"), showing its first one."""
+        if group in self.image_groups():
+            self._group = group
+            self.show_image(0)
+
+    def show_image(self, index: int) -> None:
+        """Show the current group's ``index``-th image, wrapping round."""
+        images = self._group_images()
+        if self.item is None or not images or len(self._images) < 2:
+            return
+        self._image_index = index % len(images)
+        path = images[self._image_index][0]
+        if path is None:
+            self.player.set_item(self.item.motion_item(), autoplay=False, keep_image=True)
+        else:
+            meta = {k: v for k, v in self.item.metadata.items() if k not in ("preview", "movie")}
+            still = dataclasses.replace(self.item, path=path, type=MEDIA_IMAGE, metadata=meta)
+            self.player.set_item(still, autoplay=False, keep_image=True)
+        self._update_image_label()
+
+    def step_image(self, step: int) -> None:
+        self.show_image(self._image_index + step)
+
+    def _update_image_label(self) -> None:
+        images = self._group_images()
+        for g, b in self._group_btns.items():
+            b.setChecked(g == self._group)
+        many = len(images) > 1
+        self.image_prev.setEnabled(many)
+        self.image_next.setEnabled(many)
+        if len(self._images) < 2 or not images:
+            self.image_label.setText("")
+            return
+        label = images[self._image_index][1] or images[0][1] or "Image"
+        self.image_label.setText(f"{label}  {self._image_index + 1} / {len(images)}")
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key_Left, Qt.Key_Right) and len(self._images) > 1:
+            self.step_image(-1 if event.key() == Qt.Key_Left else 1)
+            return
+        super().keyPressEvent(event)
 
     def set_copy_label(self, label: str, tooltip: str) -> None:
         self.copy_btn.setText(label)

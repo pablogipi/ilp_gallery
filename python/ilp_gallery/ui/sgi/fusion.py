@@ -57,6 +57,9 @@ QWidget#ILPGalleryRoot QLineEdit, QWidget#ILPGalleryRoot QPlainTextEdit {{ font-
 QWidget#ILPGalleryRoot QLabel#muted {{ color: {self.muted}; }}
 QWidget#ILPGalleryRoot QLabel#title {{ font-size: 14pt; font-weight: 600; }}
 QListView {{ background: {self.desktop}; }}
+QListView[listMode="true"] {{ background: {self.well}; }}
+QPushButton[imageGroup="true"]:checked {{ background: {self.accent}; color: {self.accent_text};
+    border: 1px solid {self.accent}; border-radius: 3px; padding: 3px 8px; }}
 """
 
     def _primary_palette(self) -> QPalette:
@@ -90,6 +93,9 @@ QListView {{ background: {self.desktop}; }}
 
     def list_color(self, role: str):
         return base.Theme.list_color(self, role)      # the SGI list-pane colours stay with SGI
+
+    def list_selection(self):
+        return base.Theme.list_selection(self)
 
     def polish_menu(self, menu) -> None:
         italic_menu(menu)

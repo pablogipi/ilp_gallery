@@ -60,6 +60,10 @@ class Theme:
         theme can give those panes their own colours (the SGI themes do)."""
         return self.c(role)
 
+    def list_selection(self) -> tuple[QColor, QColor]:
+        """(background, text) of a selected row in the list panes and list view."""
+        return self.c("select_bg"), self.c("select_text")
+
     def replace(self, **changes) -> "Theme":
         return dataclasses.replace(self, **changes)
 
@@ -333,6 +337,10 @@ QPushButton, QToolButton {{
     background: {tile}; border: 1px solid {border}; border-radius: 4px; padding: 5px 12px;
 }}
 QPushButton:hover, QToolButton:hover {{ background: {tile_hover}; }}
+QPushButton#sizeReset {{ padding: 0; }}
+QPushButton#flat[squareTool="true"] {{ padding: 0; min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; }}
+QPushButton#flat[imageGroup="true"] {{ padding: 3px 8px; }}
+QPushButton#flat[imageGroup="true"]:checked {{ background: {select_bg}; color: {select_text}; }}
 QWidget#ILPGalleryRoot QPushButton:disabled {{ color: {muted}; background: {panel}; }}
 QPushButton#flat, QToolButton#flat {{ background: transparent; border: none; padding: 5px 8px; }}
 QPushButton#flat:hover {{ background: {tile_hover}; }}
@@ -349,6 +357,7 @@ QTreeView::item:hover {{ background: {tile}; }}
 QTreeView::item:selected {{ background: {select_bg}; color: {select_text}; }}
 
 QListView {{ background: {bg}; border: none; outline: 0; }}
+QListView[listMode="true"] {{ background: {panel}; }}
 QScrollArea {{ background: {panel}; border: none; }}
 QScrollArea > QWidget > QWidget {{ background: {panel}; }}
 QWidget#details {{ background: {panel}; }}

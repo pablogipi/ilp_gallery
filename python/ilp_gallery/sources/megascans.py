@@ -39,7 +39,8 @@ JPEG_EXTS = (".jpg", ".jpeg")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 EMPTY_VALUES = {"", "undefined", "null", "none", "n/a"}
 PLAYER_MAX_WIDTH = 1920  # biggest preview we'd load into the player pane
-IMPORTER_VERSION = 3     # bump when records change shape -> incremental scans rebuild
+IMPORTER_VERSION = 4     # bump when records change shape -> incremental scans rebuild
+                         # 4: "images" (Clay and Tiled renders, texture maps) for the preview pane
 
 # Display names: folder / assetCategories top level -> (tree label, tile subtitle)
 TYPE_LABELS = {
@@ -119,6 +120,77 @@ def pick_previews(data: dict, files: set[str]) -> tuple[str | None, str | None]:
         or [i for i in jpgs if _width(i.get("resolution")) <= PLAYER_MAX_WIDTH]
     player = os.path.basename(max(cands, key=key)["uri"]) if cands else None
     return thumb, player
+
+
+RENDERS = (("clay", "Clay"), ("tiled", "Tiled"))      # Bridge's other renders, after the plain one
+
+
+def pick_renders(data: dict, files: set[str]) -> list[tuple[str, str]]:
+    """[(label, file name), ...] of the extra renders on disk (Clay, Tiled): the
+    largest JPEG of each up to PLAYER_MAX_WIDTH, PNG if there's no JPEG."""
+    images = [i for i in (data.get("previews") or {}).get("images") or []
+              if isinstance(i, dict) and isinstance(i.get("uri"), str) and len(i["uri"]) < 260
+              and os.path.basename(i["uri"]) in files]
+    out = []
+    for tag, label in RENDERS:
+        mine = [i for i in images if tag in (i.get("tags") or [])
+                and _width(i.get("resolution")) <= PLAYER_MAX_WIDTH]
+        if not mine:
+            continue
+        jpg = [i for i in mine if i["uri"].lower().endswith(JPEG_EXTS)]
+        best = max(jpg or mine, key=lambda i: (_area(i.get("resolution")), i.get("contentLength") or 0))
+        out.append((label, os.path.basename(best["uri"])))
+    return out
+
+
+MAP_LABELS = {"ao": "AO", "normal": "Normal", "normalbump": "Normal Bump", "albedo": "Albedo"}
+MAP_PREVIEW_MAX = 2048     # map images for the preview: the largest JPEG up to this width
+
+
+def pick_maps(data: dict, files: set[str]) -> list[tuple[str, str]]:
+    """[(label, file name), ...] of the texture maps on disk the preview can show:
+    one JPEG / PNG per component (EXR and TIFF maps are skipped: Qt can't show
+    them), the largest up to MAP_PREVIEW_MAX wide, else the smallest there is."""
+    out = []
+    for comp in data.get("components") or []:
+        kind = str(comp.get("type") or "").strip()
+        if not kind:
+            continue
+        cands = []
+        for u in comp.get("uris") or []:
+            for res in u.get("resolutions") or []:
+                for fmt in res.get("formats") or []:
+                    uri = os.path.basename(str(fmt.get("uri") or ""))
+                    if uri in files and uri.lower().endswith(IMAGE_EXTS):
+                        cands.append((_area(res.get("resolution")), _width(res.get("resolution")),
+                                      not uri.lower().endswith(JPEG_EXTS), uri))
+        if not cands:
+            continue
+        fit = [c for c in cands if c[1] <= MAP_PREVIEW_MAX]
+        best = max(fit, key=lambda c: (c[0], not c[2])) if fit else min(cands)
+        out.append((MAP_LABELS.get(kind.lower(), kind[:1].upper() + kind[1:]), best[3]))
+    return out
+
+
+def _size_label(value) -> str:
+    text = str(value or "").strip().replace(" m", "")
+    return f"{text.replace('x', ' × ')} m" if text else ""
+
+
+def list_extras(item, shared: bool) -> list[str]:
+    """For ``GalleryWidget(list_extras=...)``: a Megascans asset's physical size,
+    and its ID when other assets have the same name (Quixel names scans by
+    material: dozens of "Road", "Old Road"...)."""
+    m = item.metadata
+    if m.get("source") != "megascans":
+        return []
+    out = []
+    size = _size_label(m.get("physical_size") or m.get("scanArea"))
+    if size:
+        out.append(size)
+    if shared:
+        out.append(item.id)
+    return out
 
 
 def _fallback_preview(files: set[str], asset_dir: str) -> str | None:
@@ -249,6 +321,14 @@ def asset_record(asset_dir: str, main_category: str) -> dict | None:
             "maps": maps,
             "resolutions": resolutions,
             "physical_size": data.get("physicalSize"),
+            # the preview pane: the plain render (the item's path), its Clay and Tiled
+            # renders, and the texture maps, as Bridge's Renders / Maps buttons
+            "images": ([{"path": os.path.join(asset_dir, f), "label": label, "group": "Renders"}
+                        for label, f in pick_renders(data, files)] if player else [])
+            + [{"path": os.path.join(asset_dir, f), "label": label, "group": "Maps"}
+               for label, f in pick_maps(data, files)],
+            "image_label": "Render" if player else None,
+            "image_group": "Renders",
             "average_color": data.get("averageColor") if has_value(data.get("averageColor")) else None,
             "biome": env.get("biome"),
             "region": env.get("region"),

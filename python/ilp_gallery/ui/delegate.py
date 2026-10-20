@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
 from ..core.item import MEDIA_GIF, MEDIA_MOVIE, GalleryItem
@@ -16,6 +16,18 @@ BADGE = {MEDIA_MOVIE: "MOV", MEDIA_GIF: "GIF"}
 MARK_OK = QColor("#3fae5a")       # drawer badge: in the drawer, path up to date
 MARK_OUTDATED = QColor("#e0a030")  # the library has another path (matches the drawer text)
 TYPE_NAMES = {"image": "Image", "gif": "GIF", "movie": "Movie"}
+SEP = " · "                       # between a list row's details, as in the motion clips names
+
+
+def category_label(item: GalleryItem) -> str:
+    """The item's category path under its top level, as the tree shows it:
+    "Asphalt / Rough" for a surface in surface > asphalt > rough."""
+    from .tree import display_name, item_paths
+    paths = item_paths(item)
+    if not paths:
+        return ""
+    segs = [s for s in paths[0][1:] if s and s != "other"]
+    return " / ".join(display_name(s, depth) for depth, s in enumerate(segs, start=1))
 
 
 def subtitle(item: GalleryItem) -> str:
@@ -40,6 +52,11 @@ class TileDelegate(QStyledItemDelegate):
         self.media_badges = True                         # the MOV / GIF corner labels
         self.name_format = None                          # see ui/names.py
         self.subtitles = "always"                        # "always" | "when_needed" | "never"
+        self.mode = "grid"                               # "grid" (tiles) or "list" (rows)
+        self.labels = "always"                           # tiles: "always" or "hover" (Bridge style)
+        self.list_details = True                         # list rows: the category path
+        self.list_extras = None                          # list rows: (item, shared) -> [str]
+        self.row_height = 33                             # list mode
         self.shared_titles: set[str] = set()             # titles used by more than one item
         self.set_theme(theme.ILP)
 
@@ -51,19 +68,32 @@ class TileDelegate(QStyledItemDelegate):
         self._text = t.c("text")
         self._muted = t.c("muted")
         self._bevel = t.tile_bevel()          # SGI themes: Motif-bevelled square tiles
+        # list rows take the list panes' colours (the tree, the drawer)
+        self._list_text = t.list_color("text")
+        self._list_muted = t.list_color("muted")
+        self._list_sel_bg, self._list_sel_text = t.list_selection()
+        hover = QColor(self._list_text)
+        hover.setAlpha(28)
+        self._list_hover = hover
 
     # -- geometry ------------------------------------------------------
     def image_height(self) -> int:
         return int(self.tile_width / self.aspect)
 
     def sizeHint(self, option, index) -> QSize:
+        if self.mode == "list":
+            return QSize(200, self.row_height)        # rows span the view; only the height counts
+        label_h = 0 if self.labels == "hover" else self.LABEL_H   # hover: image-only tiles
         return QSize(self.tile_width + 2 * (self.MARGIN + self.PAD),
-                     self.image_height() + self.LABEL_H + 2 * (self.MARGIN + self.PAD))
+                     self.image_height() + label_h + 2 * (self.MARGIN + self.PAD))
 
     def card_rect(self, cell: QRect) -> QRect:
         return cell.adjusted(self.MARGIN, self.MARGIN, -self.MARGIN, -self.MARGIN)
 
     def image_rect(self, cell: QRect) -> QRect:
+        if self.mode == "list":                       # the row's thumbnail, on the left
+            h = max(8, cell.height() - 6)
+            return QRect(cell.x() + 6, cell.y() + 3, int(round(h * self.aspect)), h)
         card = self.card_rect(cell)
         return QRect(card.x() + self.PAD, card.y() + self.PAD,
                      card.width() - 2 * self.PAD, self.image_height())
@@ -72,6 +102,9 @@ class TileDelegate(QStyledItemDelegate):
     def paint(self, p: QPainter, option, index) -> None:
         item: GalleryItem = index.data(ItemRole)
         if item is None:
+            return
+        if self.mode == "list":
+            self._paint_row(p, option, item)
             return
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
@@ -136,6 +169,18 @@ class TileDelegate(QStyledItemDelegate):
         if parts.chip:
             paint_chip(p, parts, QPoint(img_rect.left() + 5, img_rect.top() + 5), option.font)
 
+        if self.labels == "hover":
+            if hovered or selected:                       # the name over the image, as in Bridge
+                self._paint_overlay_label(p, option, item, parts, img_rect)
+            if self._bevel:
+                self._paint_bevel(p, option.rect, selected)
+            elif selected:
+                p.setPen(QPen(self._accent, 2))
+                p.setBrush(Qt.NoBrush)
+                p.drawRoundedRect(card.adjusted(1, 1, -1, -1), self.RADIUS, self.RADIUS)
+            p.restore()
+            return
+
         # name + subtitle
         name_font = QFont(option.font)
         name_font.setWeight(QFont.DemiBold)
@@ -172,6 +217,153 @@ class TileDelegate(QStyledItemDelegate):
             p.setPen(QPen(self._accent, 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(card.adjusted(1, 1, -1, -1), self.RADIUS, self.RADIUS)
+        p.restore()
+
+    def _paint_overlay_label(self, p: QPainter, option, item: GalleryItem, parts, img: QRect) -> None:
+        """Hover labels: the name (and its second line when there's room) on a dark
+        band along the bottom of the image."""
+        name_font = QFont(option.font)
+        name_font.setWeight(QFont.DemiBold)
+        sub_font = QFont(option.font)
+        sub_font.setPointSizeF(max(7.0, option.font.pointSizeF() * 0.85))
+        nfm, sfm = QFontMetrics(name_font), QFontMetrics(sub_font)
+        sub = parts.subtitle if parts.subtitle is not None else subtitle(item)
+        if self.subtitles == "never" or img.height() < 3 * (nfm.height() + sfm.height()):
+            sub = ""                                      # small tiles: the name alone
+        band_h = nfm.height() + (sfm.height() if sub else 0) + 8
+        band = QRect(img.left(), img.bottom() - band_h + 1, img.width(), band_h)
+        p.save()
+        p.setClipRect(img)
+        g = QLinearGradient(band.topLeft(), band.bottomLeft())
+        g.setColorAt(0, QColor(0, 0, 0, 120))
+        g.setColorAt(1, QColor(0, 0, 0, 200))
+        p.fillRect(band, g)
+        x, w = band.left() + 6, band.width() - 12
+        p.setFont(name_font)
+        p.setPen(QColor(245, 245, 245))
+        p.drawText(QRect(x, band.top() + 4, w, nfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                   nfm.elidedText(parts.title, Qt.ElideRight, w))
+        if sub:
+            p.setFont(sub_font)
+            p.setPen(QColor(200, 200, 200))
+            p.drawText(QRect(x, band.top() + 4 + nfm.height(), w, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                       sfm.elidedText(sub, Qt.ElideRight, w))
+        p.restore()
+
+    def _thumb(self, item: GalleryItem, hovered: bool):
+        """The pixmap to show: the hover-scrub frame for moving media, else the poster."""
+        if hovered and item.motion is not None:
+            frames = self.cache.frames(item)
+            if frames:
+                return frames[min(len(frames) - 1, int(self.hover_fraction * len(frames)))]
+        return self.cache.poster(item)
+
+    def _paint_row(self, p: QPainter, option, item: GalleryItem) -> None:
+        """List mode, like the drawer's rows: a small thumbnail (hover-scrubbed for
+        movies and GIFs), the name and its second line, the media badge and the
+        drawer mark on the right."""
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        row = option.rect
+        selected = bool(option.state & QStyle.State_Selected)
+        hovered = item.id == self.hover_id
+        if selected:
+            p.fillRect(row, self._list_sel_bg)
+        elif hovered:
+            p.fillRect(row, self._list_hover)
+        text = self._list_sel_text if selected else self._list_text
+        muted = self._list_sel_text if selected else self._list_muted
+
+        img = self.image_rect(row)
+        p.fillRect(img, self._image_bg)
+        pix = self._thumb(item, hovered)
+        if pix is not None and not pix.isNull():
+            scaled = pix.size().scaled(img.size(), Qt.KeepAspectRatio)
+            target = QRect(0, 0, scaled.width(), scaled.height())
+            target.moveCenter(img.center())
+            p.drawPixmap(target, pix)
+        elif self.cache.failed(item.id):
+            self._paint_placeholder(p, img)
+        moves = item.motion is not None
+        if hovered and moves:
+            p.fillRect(QRect(img.left(), img.bottom() - 1, int(img.width() * self.hover_fraction), 2), self._accent)
+        if self._bevel:                                   # SGI: the thumbnail sits in a sunken well
+            hl, _hl2, _sh2, sh = self._bevel
+            p.setRenderHint(QPainter.Antialiasing, False)
+            fr = img.adjusted(-1, -1, 0, 0)
+            p.setPen(QPen(sh, 1))
+            p.drawLine(fr.topLeft(), fr.topRight())
+            p.drawLine(fr.topLeft(), fr.bottomLeft())
+            p.setPen(QPen(hl, 1))
+            p.drawLine(fr.bottomLeft(), fr.bottomRight())
+            p.drawLine(fr.topRight(), fr.bottomRight())
+            p.setRenderHint(QPainter.Antialiasing)
+
+        parts = format_name(self.name_format, item)
+        right = row.right() - 8
+        mark = self.marks.get(item.id)                    # drawer mark, at the far right
+        if mark is not None:
+            d = max(12, min(18, row.height() - 12))
+            self._paint_mark(p, QRect(right - d - 5 + 5, row.center().y() - d // 2 - 5, d + 5, d + 10), *mark)
+            right -= d + 8
+        badge = BADGE.get(item.motion[1] if moves else item.type) if self.media_badges else None
+        small = QFont(option.font)
+        small.setPointSizeF(max(7.0, option.font.pointSizeF() * 0.85))
+        sfm = QFontMetrics(small)
+        if badge:
+            p.setFont(small)
+            p.setPen(muted)
+            w = sfm.horizontalAdvance(badge)
+            p.drawText(QRect(right - w, row.top(), w, row.height()), Qt.AlignRight | Qt.AlignVCenter, badge)
+            right -= w + 10
+
+        x = img.right() + 10
+        if parts.chip:
+            x += paint_chip(p, parts, QPoint(x, row.center().y() - sfm.height() // 2 - 1), option.font) + 6
+        name_font = QFont(option.font)
+        name_font.setWeight(QFont.DemiBold)
+        nfm = QFontMetrics(name_font)
+        sub = parts.subtitle if parts.subtitle is not None else subtitle(item)
+        if self.subtitles == "never" or (self.subtitles == "when_needed" and parts.title not in self.shared_titles):
+            sub = ""
+        shared = parts.title in self.shared_titles
+        rest = []
+        if self.list_details:                             # the category path, minus what the name says
+            said = f"{parts.title} {sub}".lower()
+            path = category_label(item)
+            if path and path.lower() not in said:
+                rest.append(path)
+        if sub:
+            rest.append(sub)
+        if self.list_extras is not None:
+            try:
+                rest += [str(x) for x in self.list_extras(item, shared) if x]
+            except Exception:                             # a host's helper must never break painting
+                pass
+        sub = SEP.join(rest)
+        avail = max(0, right - x)
+        p.setFont(name_font)
+        p.setPen(text)
+        two_lines = bool(sub) and row.height() >= nfm.height() + sfm.height() + 8
+        if two_lines:                                     # taller rows: the subtitle under the name
+            top = row.center().y() - (nfm.height() + sfm.height()) // 2
+            p.drawText(QRect(x, top, avail, nfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                       nfm.elidedText(parts.title, Qt.ElideRight, avail))
+            p.setFont(small)
+            p.setPen(muted)
+            p.drawText(QRect(x, top + nfm.height(), avail, sfm.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                       sfm.elidedText(sub, Qt.ElideRight, avail))
+        else:                                             # compact rows: on one line, like the drawer
+            title = nfm.elidedText(parts.title, Qt.ElideRight, avail)
+            p.drawText(QRect(x, row.top(), avail, row.height()), Qt.AlignLeft | Qt.AlignVCenter, title)
+            x2 = x + nfm.horizontalAdvance(title)
+            if sub and x2 < right - 30:
+                p.setFont(small)
+                p.setPen(muted)
+                line = SEP + sub                          # "Sandy Asphalt · Asphalt / Rough · Surface"
+                p.drawText(QRect(x2, row.top(), right - x2, row.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                           sfm.elidedText(line, Qt.ElideRight, right - x2))
         p.restore()
 
     def _paint_bevel(self, p: QPainter, cell: QRect, selected: bool) -> None:

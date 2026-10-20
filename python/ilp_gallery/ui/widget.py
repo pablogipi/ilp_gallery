@@ -35,7 +35,9 @@ from typing import Callable, Iterable
 
 import time
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, QObject, QRect, QRunnable, QThreadPool, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEvent, QItemSelectionModel, QModelIndex, QObject, QRect, QRunnable, QSize, QThreadPool, Qt, QTimer, Signal,
+)
 from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMenu, QPushButton, QSlider, QSplitter, QStyle, QVBoxLayout, QWidget,
@@ -127,6 +129,40 @@ class _AppPaletteWatcher(QObject):
         QTimer.singleShot(0, self, self._callback)  # after the host finishes; dropped if we are deleted
 
 
+def view_icon(kind: str, colour) -> QIcon:
+    """Small drawn icons for the top bar: "grid" (2x2 tiles), "list" (rows) and
+    "reset" (IRIX's view-reset button: a dot in a frame)."""
+    from PySide6.QtGui import QColor
+    from PySide6.QtCore import QRectF
+    if kind not in ("grid", "list", "reset"):
+        raise ValueError(f"unknown icon {kind!r}")   # before a painter is open on the pixmap
+    pix = QPixmap(32, 32)                 # drawn at 2x, shown at 16
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    c = QColor(colour)
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    if kind == "grid":
+        for x in (4, 18):
+            for y in (4, 18):
+                p.drawRoundedRect(QRectF(x, y, 10, 10), 2, 2)
+    elif kind == "list":
+        for y in (5, 14, 23):
+            p.drawRoundedRect(QRectF(3, y, 6, 5), 1, 1)
+            p.drawRoundedRect(QRectF(12, y + 1, 17, 3), 1.5, 1.5)
+    elif kind == "reset":
+        p.setBrush(Qt.NoBrush)
+        from PySide6.QtGui import QPen
+        p.setPen(QPen(c, 3))
+        p.drawRect(QRectF(5, 5, 22, 22))
+        p.setPen(Qt.NoPen)
+        p.setBrush(c)
+        p.drawRect(QRectF(12, 12, 8, 8))
+    p.end()
+    return QIcon(pix)
+
+
 class GalleryWidget(QWidget):
     itemActivated = Signal(object)        # GalleryItem (double-click / Enter)
     exportLabelChanged = Signal(str)      # label of the main action ("Export", "Ingest", ...)
@@ -144,9 +180,11 @@ class GalleryWidget(QWidget):
     sourceFailed = Signal(object, str)    # DataSource, error
     drawerChanged = Signal(list)          # list[DrawerEntry], after an edit in the drawer UI
     uiStateChanged = Signal(dict)         # see ui_state(); debounced, only real changes
+    viewModeChanged = Signal(str)         # "grid" or "list"
     _libraryChanged = Signal()            # thread-safe hop for library listeners
 
     TILE_MIN, TILE_MAX = 90, 420           # tile width range of the size control
+    LIST_SIZE = 140                        # list mode's default on that range (~33px rows)
 
     def __init__(self, library: GalleryLibrary | None = None, cache: ThumbnailCache | None = None,
                  parent: QWidget | None = None, show_sidebar: bool = True,
@@ -162,7 +200,11 @@ class GalleryWidget(QWidget):
                  grid_title: str | None = None, drawer_category: str | None = "Assigned",
                  shared: str | None = None, log: bool = False,
                  view_command: str | None = None, view_field: str | None = None,
-                 command_shell: bool = True,
+                 command_shell: bool = True, view_mode: str = "grid",
+                 view_toggle: bool = True, list_size: int | None = None,
+                 size_reset: bool | None = None, list_details: bool = True,
+                 list_extras: "Callable[[GalleryItem, bool], list[str]] | None" = None,
+                 tile_labels: str = "always",
                  **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, "fusion-dark"
         standalone), "host", "sgi", "sgi-dark", "sgi-slate", "fusion",
@@ -197,7 +239,24 @@ class GalleryWidget(QWidget):
         ``view_field``: the record field View opens, e.g. "movie" for a full quality
         movie next to a lighter preview; default: the item's movie / GIF or ``preview``.
         ``command_shell``: run the view and export commands through ``/bin/sh -c``
-        (default) or directly."""
+        (default) or directly.
+        ``view_mode``: "grid" (tiles, the default) or "list" (rows like the drawer's:
+        a small hover-scrubbed thumbnail, the name, its second line). ``view_toggle``
+        puts a button switching between them in the top bar, as in GNOME's Files;
+        see :meth:`set_view_mode`. The size control works in both, with a size of its
+        own per mode: tile width in the grid, row height (a small range) in the list;
+        ``list_size`` is the list's starting value on the control's 90-420 scale.
+        ``size_reset``: a small button beside the size control putting the current
+        mode's size back to its default, like the reset button by IRIX's thumbwheels;
+        default: shown with ``size_control="wheel"``.
+        ``list_details``: list rows show the category path between the name and its
+        second line ("Sandy Asphalt · Asphalt / Rough · Surface").
+        ``list_extras``: a function ``(item, name_is_shared) -> [str, ...]`` adding
+        details at the end of a list row, e.g. a size, or an ID when other items have
+        the same name (``ilp_gallery.sources.megascans.list_extras``).
+        ``tile_labels``: "always" (the name under each tile) or "hover": image-only
+        tiles, the name shown over the image on the hovered and the selected tile,
+        as in Quixel Bridge. See :meth:`set_tile_labels`."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -263,7 +322,28 @@ class GalleryWidget(QWidget):
         self.size_label = QLabel("Size")
         self.size_label.setVisible(size_label)
         top.addWidget(self.size_label)
-        top.addWidget(self.size_slider)
+        size_box = QHBoxLayout()                        # the control and its reset button, touching:
+        size_box.setSpacing(0)                          # one widget, as by IRIX's thumbwheels
+        size_box.addWidget(self.size_slider)
+        top.addLayout(size_box)
+        if size_reset is None:
+            size_reset = size_control == "wheel"
+        self.size_reset_btn = QPushButton(objectName="sizeReset")
+        side = max(20, self.size_slider.sizeHint().height())   # as tall as the control it belongs to
+        self.size_slider.setFixedHeight(side)
+        self.size_reset_btn.setFixedSize(side, side)
+        self.size_reset_btn.setToolTip("Reset the size")
+        self.size_reset_btn.setCursor(Qt.PointingHandCursor)
+        self.size_reset_btn.setVisible(bool(size_reset))
+        self.size_reset_btn.clicked.connect(self.reset_size)
+        self.view_toggle_btn = QPushButton(objectName="flat")
+        self.view_toggle_btn.setProperty("squareTool", True)   # 22x22 like the reset button (SGI rule)
+        self.view_toggle_btn.setFixedSize(22, 22)
+        self.view_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.view_toggle_btn.setVisible(bool(view_toggle))
+        self.view_toggle_btn.clicked.connect(self.toggle_view_mode)
+        size_box.addWidget(self.size_reset_btn)
+        top.addWidget(self.view_toggle_btn)
         top.addLayout(self.toolbar_left)
         top.addStretch(1)
         top.addLayout(self.toolbar)
@@ -295,6 +375,11 @@ class GalleryWidget(QWidget):
         if subtitles not in ("always", "when_needed", "never"):
             raise ValueError(f"subtitles must be 'always', 'when_needed' or 'never', not {subtitles!r}")
         self.delegate.subtitles = subtitles
+        self.delegate.list_details = list_details
+        self.delegate.list_extras = list_extras or None
+        if tile_labels not in ("always", "hover"):
+            raise ValueError(f"tile_labels must be 'always' or 'hover', not {tile_labels!r}")
+        self.delegate.labels = tile_labels
         self.model.show_paths = show_paths
         self.view = GalleryView(self.delegate)
         self.view.setStyleSheet("")
@@ -302,6 +387,17 @@ class GalleryWidget(QWidget):
         self._auto_aspect = tile_aspect is None
         if tile_aspect:
             self.delegate.aspect = tile_aspect
+        if view_mode not in ("grid", "list"):
+            raise ValueError(f"view_mode must be 'grid' or 'list', not {view_mode!r}")
+        clamp = lambda v: max(self.TILE_MIN, min(self.TILE_MAX, int(v)))   # noqa: E731
+        self._default_sizes = {"grid": clamp(tile_size),
+                               "list": clamp(list_size if list_size is not None else self.LIST_SIZE)}
+        self._sizes = dict(self._default_sizes)          # each mode keeps its own size
+        self._view_mode = "grid"
+        if view_mode == "list":
+            self._view_mode = "list"
+            self.view.set_mode("list")
+            self.size_slider.setValue(self._sizes["list"])
         self.view.set_tile_width(self.size_slider.value())
         self.details = DetailPanel(self.cache)
         self.details.setMinimumWidth(300)
@@ -354,7 +450,7 @@ class GalleryWidget(QWidget):
 
         # -- wiring ------------------------------------------------------
         self.search.queryChanged.connect(self._run_query)
-        self.size_slider.valueChanged.connect(self.view.set_tile_width)
+        self.size_slider.valueChanged.connect(self._on_size)
         self.tree.pathSelected.connect(self._on_path_selected)
         self.view.activated.connect(self._on_activated)
         self.view.doubleClicked.connect(self._on_activated)
@@ -412,6 +508,7 @@ class GalleryWidget(QWidget):
         self.search.queryChanged.connect(lambda _t: changed())
         self.tree.pathSelected.connect(self._on_user_category)
         self.size_slider.valueChanged.connect(lambda _v: changed())
+        self.viewModeChanged.connect(lambda _m: changed())
         self.area.splitter.splitterMoved.connect(self._on_splitter_moved)
         self.area.column.splitterMoved.connect(self._on_splitter_moved)
         for pane in self.panes.values():
@@ -466,6 +563,7 @@ class GalleryWidget(QWidget):
             self._style_framed(label)
         if hasattr(self.size_slider, "set_theme"):          # the thumbwheel
             self.size_slider.set_theme(self.theme)
+        self._update_view_buttons()
         self.view.viewport().update()
         self.themeChanged.emit(self.theme)
 
@@ -865,12 +963,10 @@ class GalleryWidget(QWidget):
         self._update_shared_titles()
 
     def _update_shared_titles(self) -> None:
-        """Titles used by more than one item in the library (for "when_needed")."""
-        if self.delegate.subtitles == "when_needed":
-            counts = Counter(format_name(self._name_format, it).title for it in self.library)
-            self.delegate.shared_titles = {t for t, n in counts.items() if n > 1}
-        else:
-            self.delegate.shared_titles = set()
+        """Titles used by more than one item in the library: the tiles' "when_needed"
+        subtitles and the list rows' extras (the Megascans ID) tell those apart."""
+        counts = Counter(format_name(self._name_format, it).title for it in self.library)
+        self.delegate.shared_titles = {t for t, n in counts.items() if n > 1}
         self.view.viewport().update()
 
     def set_drawer_current(self, key: str | None) -> None:
@@ -1107,7 +1203,68 @@ class GalleryWidget(QWidget):
             self._show_current(self.view.currentIndex(), force=True)
 
     def set_tile_width(self, width: int) -> None:
-        self.size_slider.setValue(width)
+        """The grid's tile width (also when the list is showing: it applies on return)."""
+        if self._view_mode == "grid":
+            self.size_slider.setValue(width)
+        else:
+            self._sizes["grid"] = max(self.TILE_MIN, min(self.TILE_MAX, int(width)))
+
+    # ---------------------------------------------------------------- view mode
+    def view_mode(self) -> str:
+        """"grid" or "list"."""
+        return self._view_mode
+
+    def set_view_mode(self, mode: str) -> None:
+        """Show the items as tiles ("grid") or rows ("list"). Selection, the current
+        item and the search stay; each mode keeps its own size."""
+        if mode not in ("grid", "list"):
+            raise ValueError(f"mode must be 'grid' or 'list', not {mode!r}")
+        if mode == self._view_mode:
+            return
+        current = self.view.currentIndex()
+        self._view_mode = mode
+        self.view.set_mode(mode)
+        self.size_slider.blockSignals(True)
+        self.size_slider.setValue(self._sizes[mode])
+        self.size_slider.blockSignals(False)
+        if hasattr(self.size_slider, "update"):
+            self.size_slider.update()                     # the thumbwheel redraws its ridges
+        self.view.set_tile_width(self._sizes[mode])
+        self._update_view_buttons()
+        if current.isValid():
+            self.view.scrollTo(current)
+        self.viewModeChanged.emit(mode)
+
+    def set_tile_labels(self, mode: str) -> None:
+        """Tile names "always" under the image, or on "hover" (and the selection) only."""
+        if mode not in ("always", "hover"):
+            raise ValueError(f"tile_labels must be 'always' or 'hover', not {mode!r}")
+        self.delegate.labels = mode
+        if self._view_mode == "grid":
+            self.view.set_tile_width(self.size_slider.value())     # tiles change height
+
+    def toggle_view_mode(self) -> None:
+        self.set_view_mode("list" if self._view_mode == "grid" else "grid")
+
+    def reset_size(self) -> None:
+        """Put the current mode's size back to its default (the size reset button)."""
+        self.size_slider.setValue(self._default_sizes[self._view_mode])
+
+    def _on_size(self, value: int) -> None:
+        self._sizes[self._view_mode] = value
+        self.view.set_tile_width(value)
+
+    def _update_view_buttons(self) -> None:
+        if not hasattr(self, "view_toggle_btn"):
+            return
+        colour = self.theme.c("text")
+        other = "grid" if self._view_mode == "list" else "list"
+        self.view_toggle_btn.setIcon(view_icon(other, colour))
+        self.view_toggle_btn.setIconSize(QSize(14, 14))
+        self.view_toggle_btn.setToolTip("Show grid" if other == "grid" else "Show list")
+        self.size_reset_btn.setIcon(view_icon("reset", colour))
+        self.size_reset_btn.setIconSize(QSize(12, 12))
+        self.size_slider.setToolTip(("Row size" if self._view_mode == "list" else "Tile size") + " (Ctrl + wheel)")
 
     def set_tile_aspect(self, aspect: float) -> None:
         self._auto_aspect = False
@@ -1162,7 +1319,7 @@ class GalleryWidget(QWidget):
 
     def ui_state(self, include_drawer: bool = False) -> dict:
         """What a user set up, as plain JSON-able data: the search text, the selected
-        category, collapsed panes, tile size and pane sizes. A host can store it (a
+        category, collapsed panes, the view mode, the grid's and list's sizes and pane sizes. A host can store it (a
         node parameter, a file) and give it back with :meth:`set_ui_state`.
         ``include_drawer`` adds the drawer's entries, for hosts with nowhere else to
         keep them (a panel not tied to a node)."""
@@ -1176,7 +1333,9 @@ class GalleryWidget(QWidget):
             "search": self.search.text(),
             "category": list(category),
             "collapsed": [n for n, p in self.panes.items() if p.is_collapsed()],
-            "tile_size": self.size_slider.value(),
+            "tile_size": self._sizes["grid"],
+            "list_size": self._sizes["list"],
+            "view": self._view_mode,
             "sizes": sizes,
         } | ({"drawer": [[e.key, e.path, e.enabled] for e in self.drawer.entries()]}
              if include_drawer else {})
@@ -1204,8 +1363,13 @@ class GalleryWidget(QWidget):
                 self.area._saved[id(self.area.column)] = sizes["column"]
             if sizes:
                 self._apply_sizes()
-            if isinstance(state.get("tile_size"), int):
-                self.size_slider.setValue(state["tile_size"])
+            for key, mode in (("tile_size", "grid"), ("list_size", "list")):
+                if isinstance(state.get(key), int):
+                    self._sizes[mode] = max(self.TILE_MIN, min(self.TILE_MAX, state[key]))
+            if state.get("view") in ("grid", "list"):
+                self.set_view_mode(state["view"])
+            if isinstance(state.get("tile_size"), int) or isinstance(state.get("list_size"), int):
+                self.size_slider.setValue(self._sizes[self._view_mode])
             if "search" in state:
                 self.search.blockSignals(True)              # no debounced echo of the restore
                 self.search.setText(str(state["search"] or ""))
