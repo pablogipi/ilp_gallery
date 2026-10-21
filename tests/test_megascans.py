@@ -121,3 +121,27 @@ def test_old_caches_are_cleaned_on_load(tmp_path):
     out = megascans.MegascansSource(cache=str(cache)).load()[0]
     assert out["metadata"]["display"] == [["Scan Area", "1 m"]]
     assert out["description"] == "" and {"tropical", "Asia"} <= set(out["tags"])
+
+
+
+def test_maps_from_bridges_newer_json_and_file_names(root):
+    """Bridge's newer JSONs have "maps" instead of "components"; some list none at
+    all. The maps are found from the file names (<id>_<res>_<Map>.<ext>)."""
+    data = json.load(open(FIXTURE))
+    data.pop("components")
+    src = root / "newer.json"
+    for maps in ([{"type": "albedo", "uri": "slhnqsg_8K_Albedo.jpg", "resolution": "8192x8192"}], None):
+        if maps is None:
+            data.pop("maps", None)
+        else:
+            data["maps"] = maps
+        src.write_text(json.dumps(data))
+        files = [f"slhnqsg_8K_{m}.{ext}" for m in ("AO", "Albedo", "Normal", "Roughness") for ext in ("exr", "jpg")]
+        d = make_asset(root, "surface", f"Floor_Tiles_slhnqsg_{maps is None}", files + ["slhnqsg_Preview.png"],
+                       json_src=str(src), json_name="slhnqsg.json")
+        m = megascans.asset_record(str(d), "surface")["metadata"]
+        assert m["maps"] == ["albedo", "normal", "roughness", "ao"]
+        assert m["resolutions"] == ["8192x8192"]
+        got = [(im["group"], im["label"], os.path.basename(im["path"])) for im in m["images"]]
+        assert got == [("Maps", "Albedo", "slhnqsg_8K_Albedo.jpg"), ("Maps", "Normal", "slhnqsg_8K_Normal.jpg"),
+                       ("Maps", "Roughness", "slhnqsg_8K_Roughness.jpg"), ("Maps", "AO", "slhnqsg_8K_AO.jpg")]

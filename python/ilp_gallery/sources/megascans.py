@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable, Iterator
 
@@ -39,7 +40,8 @@ JPEG_EXTS = (".jpg", ".jpeg")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 EMPTY_VALUES = {"", "undefined", "null", "none", "n/a"}
 PLAYER_MAX_WIDTH = 1920  # biggest preview we'd load into the player pane
-IMPORTER_VERSION = 4     # bump when records change shape -> incremental scans rebuild
+IMPORTER_VERSION = 5     # bump when records change shape -> incremental scans rebuild
+                         # 5: texture maps found with Bridge's newer JSON ("maps") and by file name
                          # 4: "images" (Clay and Tiled renders, texture maps) for the preview pane
 
 # Display names: folder / assetCategories top level -> (tree label, tile subtitle)
@@ -144,32 +146,78 @@ def pick_renders(data: dict, files: set[str]) -> list[tuple[str, str]]:
 
 
 MAP_LABELS = {"ao": "AO", "normal": "Normal", "normalbump": "Normal Bump", "albedo": "Albedo"}
+MAP_ORDER = ("albedo", "normal", "roughness", "displacement", "ao", "cavity", "bump", "gloss", "specular",
+             "metalness", "opacity", "translucency")
 MAP_PREVIEW_MAX = 2048     # map images for the preview: the largest JPEG up to this width
 
 
-def pick_maps(data: dict, files: set[str]) -> list[tuple[str, str]]:
-    """[(label, file name), ...] of the texture maps on disk the preview can show:
-    one JPEG / PNG per component (EXR and TIFF maps are skipped: Qt can't show
-    them), the largest up to MAP_PREVIEW_MAX wide, else the smallest there is."""
-    out = []
-    for comp in data.get("components") or []:
-        kind = str(comp.get("type") or "").strip()
-        if not kind:
-            continue
-        cands = []
+# Bridge names texture files <id>_<res>_<Map>[_<extra>].<ext>: slhnqsg_8K_Albedo.jpg
+_MAP_FILE = re.compile(r"^[A-Za-z0-9]+_(\d+)K_([A-Za-z][A-Za-z0-9]*)(?:_[A-Za-z0-9]+)*\.([A-Za-z]+)$")
+MAP_EXTS = IMAGE_EXTS + (".exr", ".tif", ".tiff")
+
+
+def _uri_dicts(node):
+    """Every dict with a "uri" under ``node``, however the JSON nests them."""
+    if isinstance(node, dict):
+        if isinstance(node.get("uri"), str):
+            yield node
+        for v in node.values():
+            yield from _uri_dicts(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _uri_dicts(v)
+
+
+def _res_from_k(k: str) -> str:
+    n = int(k) * 1024
+    return f"{n}x{n}"
+
+
+def local_maps(data: dict, files: set[str]) -> list[tuple[str, str, str]]:
+    """[(map type, file name, resolution), ...] for the texture files on disk. Works
+    with both JSON layouts Bridge writes (old "components", newer "maps") and falls
+    back on the file names themselves, so a JSON that lists nothing still works."""
+    found: dict[str, tuple[str, str, str]] = {}
+
+    def add(kind, uri, res):
+        name = os.path.basename(str(uri or ""))
+        if name in files and name.lower().endswith(MAP_EXTS) and kind:
+            found.setdefault(name, (str(kind), name, str(res or "")))
+
+    for comp in data.get("components") or []:                  # old layout
         for u in comp.get("uris") or []:
-            for res in u.get("resolutions") or []:
-                for fmt in res.get("formats") or []:
-                    uri = os.path.basename(str(fmt.get("uri") or ""))
-                    if uri in files and uri.lower().endswith(IMAGE_EXTS):
-                        cands.append((_area(res.get("resolution")), _width(res.get("resolution")),
-                                      not uri.lower().endswith(JPEG_EXTS), uri))
-        if not cands:
-            continue
+            for r in u.get("resolutions") or []:
+                for fmt in r.get("formats") or []:
+                    add(comp.get("type"), fmt.get("uri"), r.get("resolution"))
+    for d in _uri_dicts(data.get("maps")):                      # newer layout
+        name = os.path.basename(d["uri"])
+        m = _MAP_FILE.match(name)
+        add(d.get("type") or (m.group(2) if m else ""), name,
+            d.get("resolution") or (_res_from_k(m.group(1)) if m else ""))
+    for name in files:                                          # whatever the JSON says
+        m = _MAP_FILE.match(name)
+        if m and name not in found and not name.lower().startswith(("preview", "thumb")):
+            add(m.group(2), name, _res_from_k(m.group(1)))
+    return list(found.values())
+
+
+def pick_maps(data: dict, files: set[str]) -> list[tuple[str, str]]:
+    """[(label, file name), ...] of the texture maps the preview can show: one
+    JPEG / PNG per map type (EXR and TIFF are skipped: Qt can't show them), the
+    largest up to MAP_PREVIEW_MAX wide, else the smallest there is (the player
+    decodes big JPEGs at reduced size)."""
+    by_kind: dict[str, list] = {}
+    for kind, name, res in local_maps(data, files):
+        if name.lower().endswith(IMAGE_EXTS):
+            by_kind.setdefault(kind.lower(), []).append(
+                (_area(res), _width(res), not name.lower().endswith(JPEG_EXTS), name, kind))
+    out = []
+    for key, cands in by_kind.items():
         fit = [c for c in cands if c[1] <= MAP_PREVIEW_MAX]
         best = max(fit, key=lambda c: (c[0], not c[2])) if fit else min(cands)
-        out.append((MAP_LABELS.get(kind.lower(), kind[:1].upper() + kind[1:]), best[3]))
-    return out
+        out.append((MAP_LABELS.get(key, best[4][:1].upper() + best[4][1:]), best[3]))
+    order = {k: i for i, k in enumerate(MAP_ORDER)}
+    return sorted(out, key=lambda lf: order.get(lf[0].lower(), len(order)))
 
 
 def _size_label(value) -> str:
@@ -288,10 +336,15 @@ def asset_record(asset_dir: str, main_category: str) -> dict | None:
     display = clean_display([[m.get("name") or m["key"], m.get("value")] for m in meta_list
                              if has_value(m.get("value"))])
     env = {k: v for k, v in (data.get("environment") or {}).items() if has_value(v)}
-    maps = _dedupe([c.get("type") for c in data.get("components") or [] if c.get("type")])
+    on_disk = local_maps(data, files)
+    order = {k: i for i, k in enumerate(MAP_ORDER)}
+    maps = sorted(_dedupe([c.get("type") for c in data.get("components") or [] if c.get("type")]
+                          + [kind.lower() for kind, _n, _r in on_disk]),
+                  key=lambda k: order.get(str(k).lower(), len(order)))
     resolutions = sorted({r.get("resolution") for c in data.get("components") or []
                           for u in c.get("uris") or [] for r in u.get("resolutions") or []
-                          if r.get("resolution")}, key=_area, reverse=True)
+                          if r.get("resolution")} | {res for _k, _n, res in on_disk if res},
+                         key=_area, reverse=True)
     # Biome and region: searchable tags, not rows of their own in the details pane
     tags = _dedupe(tags + [str(v) for v in (env.get("biome"), env.get("region")) if v])
     description = ""
