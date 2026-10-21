@@ -16,6 +16,7 @@ from . import theme
 
 PathRole = Qt.UserRole + 10
 Path = tuple[str, ...]
+COLLECTIONS = "@collections"          # tree paths (COLLECTIONS, "Environment", "Industrial", ...)
 
 # Known top-level names and order (Megascans); anything else is title-cased, alphabetically after.
 TOP_LEVEL = [
@@ -87,6 +88,7 @@ class CategoryTree(QTreeView):
         self.clicked.connect(self._on_clicked)
         self._press_state: tuple[QModelIndex, bool, bool] | None = None
         self._special: dict[Path, tuple[str, set[str]]] = {}     # set_special()
+        self._special_order: dict[Path, int] = {}
 
     def _setup_header(self) -> None:
         h = self.header()
@@ -98,10 +100,16 @@ class CategoryTree(QTreeView):
     def build(self, library: GalleryLibrary) -> None:
         current = self.current_path()
         ids: dict[Path, set[str]] = {}
+        collections: dict[Path, set[str]] = {}
         for it in library:
             for path in item_paths(it):
                 for depth in range(1, len(path) + 1):
                     ids.setdefault(path[:depth], set()).add(it.id)
+            for coll in it.collections:                       # metadata["collections"]
+                path = (COLLECTIONS, *coll)
+                for depth in range(1, len(path) + 1):
+                    collections.setdefault(path[:depth], set()).add(it.id)
+        ids.update(collections)
         for path, (_label, members) in self._special.items():
             ids[path] = set(members)
         self.ids = ids
@@ -113,13 +121,23 @@ class CategoryTree(QTreeView):
         self._rows = {}
         root = self._model.invisibleRootItem()
         self._add_row(root, (), "All assets", bold=True)
-        for path, (label, _members) in self._special.items():     # pinned under "All assets"
-            self._add_row(root, path, label, italic=True)
+        for path in self._special_paths():                       # pinned under "All assets"
+            self._add_row(root, path, self._special[path][0], italic=True)
+        # "Collections", with each collection's own hierarchy, names as given
+        parents = {p[:-1] for p in collections}
+        # each level: single collections first, then groups of them (e.g. "Packs")
+        for path in sorted(collections, key=lambda p: (len(p), [s.lower() for s in p[:-1]],
+                                                       p in parents, p[-1].lower())):
+            if len(path) == 1:
+                self._add_row(root, path, "Collections", italic=True)
+            else:
+                self._add_row(self._rows[path[:-1]][0], path, path[-1])
 
         def sort_key(p: Path):
             return (_TOP_ORDER.get(p[-1], 999) if len(p) == 1 else 0, display_name(p[-1], len(p) - 1).lower())
 
-        for path in sorted((p for p in ids if p not in self._special), key=lambda p: (len(p), sort_key(p))):
+        for path in sorted((p for p in ids if p not in self._special and p not in collections),
+                           key=lambda p: (len(p), sort_key(p))):
             parent = root if len(path) == 1 else self._rows[path[:-1]][0]
             self._add_row(parent, path, display_name(path[-1], len(path) - 1))
         self.update_counts(None)
@@ -142,14 +160,19 @@ class CategoryTree(QTreeView):
         self._rows[path] = (name, count)
 
     # -- pinned rows ---------------------------------------------------
-    def set_special(self, path: Path, label: str, members) -> None:
+    def _special_paths(self) -> list[Path]:
+        return sorted(self._special, key=lambda p: self._special_order.get(p, 0))
+
+    def set_special(self, path: Path, label: str, members, order: int = 0) -> None:
         """A pinned row under "All assets" with its own members (e.g. the items in a
         drawer). Selecting it filters to them like a category; calling again updates
-        the members (and the label) without rebuilding the tree."""
+        the members (and the label) without rebuilding the tree. Pinned rows are
+        listed by ``order``, then in the order they were added."""
         path = tuple(path)
         members = set(members)
         is_new = path not in self._special
         self._special[path] = (label, members)
+        self._special_order.setdefault(path, order)
         self.ids[path] = members
         if path in self._rows:
             self._rows[path][0].setText(label)
@@ -164,7 +187,7 @@ class CategoryTree(QTreeView):
             count.setData(path, PathRole)
             count.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             count.setForeground(self._theme.list_color("muted"))
-            root.insertRow(len(self._special), [name, count])
+            root.insertRow(1 + self._special_paths().index(path), [name, count])
             self._rows[path] = (name, count)
         self.update_counts(self._visible)
 
@@ -172,6 +195,7 @@ class CategoryTree(QTreeView):
         path = tuple(path)
         if self._special.pop(path, None) is None:
             return
+        self._special_order.pop(path, None)
         self.ids.pop(path, None)
         row = self._rows.pop(path, None)
         if row is not None:

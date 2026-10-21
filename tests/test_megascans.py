@@ -145,3 +145,25 @@ def test_maps_from_bridges_newer_json_and_file_names(root):
         got = [(im["group"], im["label"], os.path.basename(im["path"])) for im in m["images"]]
         assert got == [("Maps", "Albedo", "slhnqsg_8K_Albedo.jpg"), ("Maps", "Normal", "slhnqsg_8K_Normal.jpg"),
                        ("Maps", "Roughness", "slhnqsg_8K_Roughness.jpg"), ("Maps", "AO", "slhnqsg_8K_AO.jpg")]
+
+
+
+def test_collections_from_semantic_tags_and_pack():
+    data = {"semanticTags": {"collection": ["Iceland"]}, "pack": {"_id": "iceland", "name": "Iceland"}}
+    assert megascans.asset_collections(data) == [["Iceland"]]                       # same name: once
+    data = {"semanticTags": {"collection": ["Wasteland"]},
+            "pack": {"_id": "neoclassical-modular-building-vol-4", "name": "Neoclassical Modular Building Vol. 4"}}
+    assert megascans.asset_collections(data) == [["Wasteland"], ["Packs", "Neoclassical Modular Building Vol. 4"]]
+    assert megascans.asset_collections({"pack": None, "semanticTags": {}}) == []
+    assert megascans.asset_collections({"pack": {"_id": "definitive-fruits"}}) == [["Packs", "definitive-fruits"]]
+
+
+def test_records_carry_collections(root):
+    data = json.load(open(FIXTURE))
+    data["pack"] = {"_id": "sandstone", "name": "Sandstone"}
+    data["semanticTags"]["collection"] = ["Desert Rocks"]
+    src = root / "c.json"
+    src.write_text(json.dumps(data))
+    d = make_asset(root, "surface", "Sandstone_a", ["rmlkx2p_Grid_360_thumb.jpg"], json_src=str(src))
+    rec = megascans.asset_record(str(d), "surface")
+    assert rec["metadata"]["collections"] == [["Desert Rocks"], ["Packs", "Sandstone"]]

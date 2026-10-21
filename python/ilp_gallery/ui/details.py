@@ -6,7 +6,7 @@ import dataclasses
 import html
 import os
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
@@ -39,6 +39,7 @@ class DetailPanel(QWidget):
     exportMenuRequested = Signal(list, object)  # [GalleryItem], global QPoint -> choose exporter
     copyCommandRequested = Signal(list)
     previewRequested = Signal(list)         # [GalleryItem] -> the preview command
+    favouriteToggled = Signal(object, bool)  # GalleryItem, now a favourite
     openFolderRequested = Signal(object)    # GalleryItem
     categoryClicked = Signal(tuple)
     tagClicked = Signal(str)
@@ -108,6 +109,8 @@ class DetailPanel(QWidget):
         self.can_preview = lambda item: item.motion is not None   # set by the gallery
         self.name_format = None           # set by the gallery: detail rows, see ui/names.py
         self.show_paths = True            # Location and "Open folder"
+        self.is_favourite = None          # set by the gallery: item -> bool; None: no star
+        self.polish_new = None            # set by the gallery: theme widgets made later (group buttons)
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
         export_group = QHBoxLayout()
@@ -141,7 +144,18 @@ class DetailPanel(QWidget):
         bl = QVBoxLayout(body)
         bl.setContentsMargins(12, 10, 12, 12)
         bl.setSpacing(6)
-        bl.addWidget(self.title)
+        self.fav_btn = QPushButton(objectName="flat", checkable=True)
+        self.fav_btn.setProperty("squareTool", True)
+        self.fav_btn.setFixedSize(22, 22)
+        self.fav_btn.setIconSize(QSize(16, 16))
+        self.fav_btn.setCursor(Qt.PointingHandCursor)
+        self.fav_btn.setVisible(False)                   # the gallery shows it when favourites are on
+        self.fav_btn.toggled.connect(self._on_fav_toggled)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(6)
+        title_row.addWidget(self.title, 1)
+        title_row.addWidget(self.fav_btn, 0, Qt.AlignTop)
+        bl.addLayout(title_row)
         bl.addWidget(self.sub)
         bl.addSpacing(4)
         bl.addLayout(buttons)
@@ -204,6 +218,9 @@ class DetailPanel(QWidget):
         for b in (self.export_btn, self.more_btn, self.copy_btn, self.folder_btn, self.preview_btn):
             b.setEnabled(has)
         self.folder_btn.setVisible(self.show_paths)            # also before anything is selected
+        self.fav_btn.setVisible(has and self.is_favourite is not None)
+        if has and self.is_favourite is not None:
+            self.set_favourite(bool(self.is_favourite(item)))
         self.player.set_item(item.motion_item() if item is not None else None, autoplay=autoplay)
         self._set_images(item)
         self.preview_btn.setVisible(self._preview_on and item is not None and self.can_preview(item))
@@ -261,6 +278,8 @@ class DetailPanel(QWidget):
                 b.clicked.connect(lambda _c=False, g=g: self.set_image_group(g))
                 self._group_lay.addWidget(b)
                 self._group_btns[g] = b
+                if self.polish_new is not None:
+                    self.polish_new(b)
         self.images_bar.setVisible(len(self._images) > 1)
         self._update_image_label()
 
@@ -317,6 +336,27 @@ class DetailPanel(QWidget):
             return
         super().keyPressEvent(event)
 
+    # -- favourite star ------------------------------------------------------
+    _fav_quiet = False
+
+    def set_favourite(self, on: bool) -> None:
+        """Show the current item's favourite state (no favouriteToggled)."""
+        self._fav_quiet = True
+        self.fav_btn.setChecked(on)
+        self._fav_quiet = False
+        self._update_fav_icon()
+
+    def _on_fav_toggled(self, on: bool) -> None:
+        self._update_fav_icon()
+        if not self._fav_quiet and self.item is not None:
+            self.favouriteToggled.emit(self.item, on)
+
+    def _update_fav_icon(self) -> None:
+        from .delegate import star_icon
+        on = self.fav_btn.isChecked()
+        self.fav_btn.setIcon(star_icon(on, self._theme.c("muted")))
+        self.fav_btn.setToolTip("Remove from Favourites" if on else "Add to Favourites")
+
     _copy_needs_paths = False
 
     def _update_copy_visible(self) -> None:
@@ -369,6 +409,15 @@ class DetailPanel(QWidget):
             crumbs.append(" <span class='k'>›</span> ".join(segs))
         if crumbs:
             parts.append("<h4>Category</h4>" + "<br>".join(crumbs))
+        colls = []
+        for coll in it.collections:                        # clickable, like the categories
+            segs = []
+            for d in range(len(coll)):
+                href = "/".join(("@collections", *coll[:d + 1]))
+                segs.append(f'<a href="cat:{esc(href)}">{esc(coll[d])}</a>')
+            colls.append(" <span class='k'>›</span> ".join(segs))
+        if colls:
+            parts.append("<h4>Collections</h4>" + "<br>".join(colls))
 
         # key / value table
         rows = it.metadata.get("display")

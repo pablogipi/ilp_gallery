@@ -221,7 +221,7 @@ def test_tree_hierarchy_and_click_to_open(app, browser):
     from PySide6.QtTest import QTest
     t = browser.gallery.tree
     tops = [t._model.item(r, 0).text() for r in range(t._model.rowCount())]
-    assert tops == ["All assets", "Surfaces"]                    # nested, not flat
+    assert tops == ["All assets", "Favourites", "Surfaces"]      # nested, not flat
     surfaces = t._model.indexFromItem(t._rows[("surface",)][0])
     assert not t.isExpanded(surfaces)                             # starts collapsed
     rect = t.visualRect(surfaces)
@@ -247,9 +247,9 @@ def test_outdated_library_is_upgraded(app, megascans_lib, cache, tmp_path, monke
     from ilp_gallery.ui.browser import GalleryBrowser
     b = GalleryBrowser(cache=cache)
     b.load(str(old))
-    wait(app, lambda: b.gallery.tree._model.rowCount() > 1, 2)
+    wait(app, lambda: b.gallery.tree._model.rowCount() > 2, 2)  # All assets, Favourites, then categories
     tops = [b.gallery.tree._model.item(r, 0).text() for r in range(b.gallery.tree._model.rowCount())]
-    assert tops == ["All assets", "Surfaces"]                    # no flat category flood meanwhile
+    assert tops == ["All assets", "Favourites", "Surfaces"]      # no flat category flood meanwhile
     assert wait(app, lambda: b.gallery.library.get("xbknedb").metadata.get("category_paths"), 15)
     assert "older version of the importer" in b.log_panel.text.toPlainText()
     b.close()

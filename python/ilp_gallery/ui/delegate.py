@@ -15,6 +15,55 @@ from .names import format_name, paint_chip, split_title
 BADGE = {MEDIA_MOVIE: "MOV", MEDIA_GIF: "GIF"}
 MARK_OK = QColor("#3fae5a")       # drawer badge: in the drawer, path up to date
 MARK_OUTDATED = QColor("#e0a030")  # the library has another path (matches the drawer text)
+FAVOURITE = QColor("#f2c230")      # the favourite star (fixed, like the drawer badge)
+
+
+def star_path(r: QRectF) -> QPainterPath:
+    """A five-pointed star filling ``r``."""
+    import math
+    cx, cy = r.center().x(), r.center().y() + r.height() * 0.04
+    outer, inner = min(r.width(), r.height()) / 2, min(r.width(), r.height()) / 2 * 0.45
+    path = QPainterPath()
+    for i in range(10):
+        a = -math.pi / 2 + i * math.pi / 5
+        rad = outer if i % 2 == 0 else inner
+        pt = (cx + rad * math.cos(a), cy + rad * math.sin(a))
+        path.moveTo(*pt) if i == 0 else path.lineTo(*pt)
+    path.closeSubpath()
+    return path
+
+
+def paint_star(p: QPainter, r: QRectF, filled: bool = True, colour: QColor = FAVOURITE) -> None:
+    """The favourite badge: a gold star with a dark rim, readable on any image."""
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    path = star_path(r)
+    p.setPen(QPen(QColor(0, 0, 0, 170), 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.setBrush(Qt.NoBrush)
+    p.drawPath(path)
+    p.setPen(QPen(colour, 1.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.setBrush(colour if filled else Qt.NoBrush)
+    p.drawPath(path)
+    p.restore()
+
+
+def star_icon(filled: bool, colour: QColor | None = None):
+    """A star QIcon for buttons: filled gold, or an outline in ``colour``."""
+    from PySide6.QtGui import QIcon, QPixmap
+    pix = QPixmap(32, 32)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    path = star_path(QRectF(3, 3, 26, 26))
+    if filled:
+        p.setPen(QPen(FAVOURITE.darker(150), 1.5))
+        p.setBrush(FAVOURITE)
+    else:
+        p.setPen(QPen(colour or QColor("#999999"), 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+    p.drawPath(path)
+    p.end()
+    return QIcon(pix)
 TYPE_NAMES = {"image": "Image", "gif": "GIF", "movie": "Movie"}
 SEP = " · "                       # between a list row's details, as in the motion clips names
 
@@ -49,6 +98,7 @@ class TileDelegate(QStyledItemDelegate):
         self.placeholder = None                # QIcon for items without a thumbnail
         self.hover_fraction = 0.0
         self.marks: dict[str, tuple[bool, str]] = {}   # item id -> (enabled, drawer state)
+        self.favourites: set[str] = set()                # item ids with the star
         self.media_badges = True                         # the MOV / GIF corner labels
         self.name_format = None                          # see ui/names.py
         self.subtitles = "always"                        # "always" | "when_needed" | "never"
@@ -164,6 +214,10 @@ class TileDelegate(QStyledItemDelegate):
         mark = self.marks.get(item.id)
         if mark is not None:
             self._paint_mark(p, img_rect, *mark)
+        if item.id in self.favourites:                    # top right, beside the drawer mark
+            d = max(13, min(20, img_rect.height() // 6))
+            right = img_rect.right() - 5 - (d + 6 if mark is not None else 0)
+            paint_star(p, QRectF(right - d, img_rect.top() + 5, d, d))
 
         parts = format_name(self.name_format, item)
         if parts.chip:
@@ -306,6 +360,10 @@ class TileDelegate(QStyledItemDelegate):
         if mark is not None:
             d = max(12, min(18, row.height() - 12))
             self._paint_mark(p, QRect(right - d - 5 + 5, row.center().y() - d // 2 - 5, d + 5, d + 10), *mark)
+            right -= d + 8
+        if item.id in self.favourites:
+            d = 14
+            paint_star(p, QRectF(right - d, row.center().y() - d / 2, d, d))
             right -= d + 8
         badge = BADGE.get(item.motion[1] if moves else item.type) if self.media_badges else None
         small = QFont(option.font)

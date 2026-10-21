@@ -163,6 +163,9 @@ def view_icon(kind: str, colour) -> QIcon:
     return QIcon(pix)
 
 
+_FAV_GALLERIES: "weakref.WeakSet[GalleryWidget]" = weakref.WeakSet()   # favourites kept in sync
+
+
 class GalleryWidget(QWidget):
     itemActivated = Signal(object)        # GalleryItem (double-click / Enter)
     exportLabelChanged = Signal(str)      # label of the main action ("Export", "Ingest", ...)
@@ -181,6 +184,7 @@ class GalleryWidget(QWidget):
     drawerChanged = Signal(list)          # list[DrawerEntry], after an edit in the drawer UI
     uiStateChanged = Signal(dict)         # see ui_state(); debounced, only real changes
     viewModeChanged = Signal(str)         # "grid" or "list"
+    favouritesChanged = Signal(list)      # list[GalleryItem], the favourites now in the library
     _libraryChanged = Signal()            # thread-safe hop for library listeners
 
     TILE_MIN, TILE_MAX = 90, 420           # tile width range of the size control
@@ -204,7 +208,9 @@ class GalleryWidget(QWidget):
                  view_toggle: bool = True, list_size: int | None = None,
                  size_reset: bool | None = None, list_details: bool = True,
                  list_extras: "Callable[[GalleryItem, bool], list[str]] | None" = None,
-                 tile_labels: str = "always",
+                 tile_labels: str = "always", favourites: bool = True,
+                 favourites_key: str = "default", favourites_field: str = "id",
+                 favourites_store=None,
                  **_ignored) -> None:
         """``theme``: "auto" (default; match Houdini / Nuke / Maya, "fusion-dark"
         standalone), "host", "sgi", "sgi-dark", "sgi-slate", "fusion",
@@ -256,7 +262,13 @@ class GalleryWidget(QWidget):
         the same name (``ilp_gallery.sources.megascans.list_extras``).
         ``tile_labels``: "always" (the name under each tile) or "hover": image-only
         tiles, the name shown over the image on the hovered and the selected tile,
-        as in Quixel Bridge. See :meth:`set_tile_labels`."""
+        as in Quixel Bridge. See :meth:`set_tile_labels`.
+        ``favourites``: a star on favourite items (tiles, rows, the details pane) and a
+        pinned "Favourites" category; set from the context menu or the details star.
+        Saved per user (``favourites_store``, default QSettings) under
+        ``favourites_key``, so every gallery keeps its own; each item is stored as
+        its source name plus ``favourites_field`` ("id", or "name" for items whose id
+        changes with new versions). Galleries with the same key stay in sync."""
         super().__init__(parent)
         self.setObjectName("ILPGallery")
         self._styled_root = styled and parent is None
@@ -404,6 +416,17 @@ class GalleryWidget(QWidget):
         self.log_pane = LogPane()
         self.drawer = DrawerWidget(key=drawer_key, title=drawer_title, path_key=drawer_path)
         self.details.show_paths = self.drawer.show_paths = show_paths
+        self._fav_on = bool(favourites)
+        self._fav_key = f"favourites/{favourites_key}"
+        self._fav_field = favourites_field
+        if favourites_store is None and self._fav_on:
+            from .persist import SettingsStore
+            favourites_store = SettingsStore()
+        self._fav_store = favourites_store
+        self._fav: set[str] = self._read_favourites()
+        if self._fav_on:
+            _FAV_GALLERIES.add(self)
+            self.details.is_favourite = self.is_favourite
         self.details.folder_btn.setVisible(show_paths)
         self._drawer_index: dict[str, GalleryItem] = {}
         self._drawer_dupes: tuple[str, ...] = ()
@@ -462,6 +485,8 @@ class GalleryWidget(QWidget):
         self.details.exportRequested.connect(lambda items: self.export(items))
         self.details.exportMenuRequested.connect(self._export_menu)
         self.details.copyCommandRequested.connect(self.copy_command)
+        self.details.favouriteToggled.connect(lambda item, on: self.set_favourite([item], on))
+        self.details.polish_new = self._polish_added
         self._update_copy_button()
         self.set_view_command(default_view_command() if view_command is None else view_command)
         self.details.previewRequested.connect(self.preview)
@@ -1230,6 +1255,70 @@ class GalleryWidget(QWidget):
         else:
             self._sizes["grid"] = max(self.TILE_MIN, min(self.TILE_MAX, int(width)))
 
+    # ---------------------------------------------------------------- favourites
+    FAVOURITES_PATH = ("@favourites",)             # the pinned "Favourites" category
+
+    def _fav_id(self, item: GalleryItem) -> str:
+        return f"{item.source}:{item.value(self._fav_field)}"
+
+    def is_favourite(self, item: GalleryItem) -> bool:
+        return self._fav_on and self._fav_id(item) in self._fav
+
+    def favourites(self) -> list[GalleryItem]:
+        """The favourite items in the library (favourites of items not loaded are kept)."""
+        return [it for it in self.library if self.is_favourite(it)]
+
+    def set_favourite(self, items, on: bool = True) -> None:
+        """Mark ``items`` (a GalleryItem or a list) as favourites, or not; saved at once."""
+        if not self._fav_on:
+            return
+        items = [items] if isinstance(items, GalleryItem) else list(items)
+        keys = {self._fav_id(it) for it in items}
+        new = (self._fav | keys) if on else (self._fav - keys)
+        if new == self._fav:
+            return
+        self._fav = new
+        self._write_favourites()
+        self._update_favourites()
+        for other in list(_FAV_GALLERIES):               # other open galleries with the same key
+            if other is not self and other._fav_key == self._fav_key and other._fav_store is not None:
+                other._fav = set(new)
+                other._update_favourites()
+
+    def toggle_favourite(self, items) -> None:
+        items = [items] if isinstance(items, GalleryItem) else list(items)
+        self.set_favourite(items, not all(self.is_favourite(it) for it in items))
+
+    def _read_favourites(self) -> set[str]:
+        if not self._fav_on or self._fav_store is None:
+            return set()
+        try:
+            data = json.loads(self._fav_store.read(self._fav_key) or "[]")
+            return {str(x) for x in data} if isinstance(data, list) else set()
+        except (ValueError, TypeError):
+            return set()
+
+    def _write_favourites(self) -> None:
+        if self._fav_store is not None:
+            self._fav_store.write(self._fav_key, json.dumps(sorted(self._fav)))
+
+    def _update_favourites(self, emit: bool = True) -> None:
+        if not self._fav_on:
+            return
+        members = {it.id for it in self.library if self._fav_id(it) in self._fav}
+        changed = members != self.delegate.favourites
+        self.delegate.favourites = members
+        before = self.tree.ids.get(self.FAVOURITES_PATH)
+        self.tree.set_special(self.FAVOURITES_PATH, "Favourites", members, order=1)   # after the drawer's
+        if self._path_filter == self.FAVOURITES_PATH and before != members:
+            self._apply_filters()
+        if changed:
+            self.view.viewport().update()
+        if self.details.item is not None:
+            self.details.set_favourite(self.is_favourite(self.details.item))
+        if emit and changed:
+            self.favouritesChanged.emit(self.favourites())
+
     # ---------------------------------------------------------------- view mode
     def view_mode(self) -> str:
         """"grid" or "list"."""
@@ -1473,6 +1562,7 @@ class GalleryWidget(QWidget):
                 self.view.set_tile_width(self.size_slider.value())
         self.tree.blockSignals(True)
         self.tree.build(self.library)
+        self._update_favourites(emit=False)
         self.tree.blockSignals(False)
         self._path_filter = self.tree.current_path()
         self.search.set_vocabulary(list(self.library.tags()), list(self.library.categories()))
@@ -1664,6 +1754,14 @@ class GalleryWidget(QWidget):
         n = len(items)
         menu = QMenu(self)
         self.theme.polish_menu(menu)
+        if self._fav_on:
+            add = [it for it in items if not self.is_favourite(it)]
+            if add:
+                menu.addAction(f"Add to Favourites ({len(add)})" if n > 1 else "Add to Favourites",
+                               lambda: self.set_favourite(add, True))
+            else:
+                menu.addAction(f"Remove from Favourites ({n})" if n > 1 else "Remove from Favourites",
+                               lambda: self.set_favourite(items, False))
         if self.has_drawer():
             title = self.drawer.title.lower()
             menu.addAction(f"Add to {title} ({n})" if n > 1 else f"Add to {title}",
@@ -1681,10 +1779,12 @@ class GalleryWidget(QWidget):
         menu.addSeparator()
         if self._export_enabled:
             menu.addAction("Copy command", lambda: self.copy_command(items))
-        menu.addAction("Copy path" + ("s" if n > 1 else ""), self.copy_paths)
+        if self.model.show_paths:                         # users without paths don't get them here either
+            menu.addAction("Copy path" + ("s" if n > 1 else ""), self.copy_paths)
         menu.addAction("Copy ID" + ("s" if n > 1 else ""),
                        lambda: QGuiApplication.clipboard().setText("\n".join(i.id for i in items)))
-        menu.addAction("Open folder", lambda: _open(_folder(items[0])))
+        if self.model.show_paths:
+            menu.addAction("Open folder", lambda: _open(_folder(items[0])))
         if items[0].tags:
             sub = menu.addMenu("Filter by tag")
             self.theme.polish_menu(sub)

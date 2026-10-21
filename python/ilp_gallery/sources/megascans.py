@@ -40,7 +40,9 @@ JPEG_EXTS = (".jpg", ".jpeg")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 EMPTY_VALUES = {"", "undefined", "null", "none", "n/a"}
 PLAYER_MAX_WIDTH = 1920  # biggest preview we'd load into the player pane
-IMPORTER_VERSION = 5     # bump when records change shape -> incremental scans rebuild
+IMPORTER_VERSION = 6     # bump when records change shape -> incremental scans rebuild
+                         # 6: "collections" (semanticTags.collection, the pack) and
+                         #    "states" / "environments" / "colors" (Bridge's filters)
                          # 5: texture maps found with Bridge's newer JSON ("maps") and by file name
                          # 4: "images" (Clay and Tiled renders, texture maps) for the preview pane
 
@@ -220,6 +222,25 @@ def pick_maps(data: dict, files: set[str]) -> list[tuple[str, str]]:
     return sorted(out, key=lambda lf: order.get(lf[0].lower(), len(order)))
 
 
+PACKS = "Packs"      # the collections branch's level for Quixel's packs
+
+
+def asset_collections(data: dict) -> list[list[str]]:
+    """The asset's collections for the gallery's "Collections" branch: Quixel's named
+    collections (``semanticTags.collection``: "Iceland", "Wasteland"...) at the top,
+    and its pack (``pack.name``: "Neoclassical Modular Building Vol. 4") under
+    "Packs", unless a collection already has the pack's name."""
+    sem = data.get("semanticTags") or {}
+    names = _dedupe(_words(sem.get("collection")))
+    out = [[n] for n in names]
+    pack = data.get("pack")
+    pack_name = (pack.get("name") or pack.get("_id")) if isinstance(pack, dict) else pack
+    pack_name = str(pack_name or "").strip()
+    if pack_name and pack_name.lower() not in {n.lower() for n in names}:
+        out.append([PACKS, pack_name])
+    return out
+
+
 def _size_label(value) -> str:
     text = str(value or "").strip().replace(" m", "")
     return f"{text.replace('x', ' × ')} m" if text else ""
@@ -372,6 +393,10 @@ def asset_record(asset_dir: str, main_category: str) -> dict | None:
             "maps": maps,
             "resolutions": resolutions,
             "physical_size": data.get("physicalSize"),
+            "collections": asset_collections(data),
+            # Bridge's filters (States, Environments, Colors), kept apart for filter menus
+            **{key: _dedupe([w.title() if w.islower() else w for w in _words(sem.get(src))])
+               for key, src in (("states", "state"), ("environments", "environment"), ("colors", "color"))},
             # the preview pane: the plain render (the item's path), its Clay and Tiled
             # renders, and the texture maps, as Bridge's Renders / Maps buttons
             "images": ([{"path": os.path.join(asset_dir, f), "label": label, "group": "Renders"}

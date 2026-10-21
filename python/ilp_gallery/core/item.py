@@ -116,6 +116,12 @@ class GalleryItem:
         return self.metadata.get("category_paths") or []
 
     @property
+    def collections(self) -> list[list[str]]:
+        """Collection paths the item belongs to (``make_record(collections=...)``)."""
+        from .source import normalize_collections
+        return normalize_collections(self.metadata.get("collections"))
+
+    @property
     def category(self) -> str:
         """The item's main category: ``metadata["category"]`` (make_record's
         ``category=``), else the first tree level, else the first of ``categories``."""

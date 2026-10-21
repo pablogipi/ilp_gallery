@@ -68,11 +68,28 @@ class Changes:
         return bool(self.updated or self.removed or self.reset)
 
 
+def normalize_collections(value) -> list[list[str]]:
+    """Collection paths as lists of names: a path list, a "A/B/C" string, or a list
+    of either; empty names dropped."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    out = []
+    for p in value:
+        segs = [s.strip() for s in p.split("/")] if isinstance(p, str) else [str(s).strip() for s in p]
+        segs = [s for s in segs if s]
+        if segs and segs not in out:
+            out.append(segs)
+    return out
+
+
 def make_record(path: str, id: str | None = None, name: str | None = None, *,
                 type: str | None = None, category: str | None = None,
                 categories: Iterable[str] = (), tags: Iterable[str] = (),
                 description: str = "", thumbnail: str | None = None,
                 type_label: str | None = None, category_paths: Iterable[Iterable[str]] | None = None,
+                collections: "Iterable[Iterable[str] | str] | None" = None,
                 display: Iterable[tuple[str, Any]] | dict | None = None, tile_aspect: float | None = None,
                 **metadata: Any) -> Record:
     """Build a gallery record (the internal JSON representation) with named arguments.
@@ -82,6 +99,9 @@ def make_record(path: str, id: str | None = None, name: str | None = None, *,
     ``type_label``     subtitle under the tile ("Model", "Surface", ...)
     ``category``       the item's main category ("locomotion"); ``item.category``
     ``category_paths`` tree hierarchy: [["locomotion", "run"]]; default [[category]]
+    ``collections``    collections the item belongs to, each a path:
+                       [["Environment", "Industrial", "Mine"]] or ["Environment/Industrial/Mine"];
+                       shown under "Collections" in the category tree
     ``categories``     flat list searched by ``cat:``; default: ``category`` plus every
                        segment of ``category_paths``
     ``display``        details-panel rows: [("Version", 12), ("Artist", "pablo")] or a dict
@@ -100,6 +120,8 @@ def make_record(path: str, id: str | None = None, name: str | None = None, *,
         meta["type_label"] = type_label
     if category_paths:
         meta["category_paths"] = [[str(s) for s in p] for p in category_paths]
+    if collections:
+        meta["collections"] = normalize_collections(collections)
     if display:
         rows = display.items() if isinstance(display, dict) else display
         meta["display"] = [[str(k), v] for k, v in rows]
