@@ -6,7 +6,8 @@ import dataclasses
 import html
 import os
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
@@ -32,6 +33,34 @@ def _res_label(res: str) -> str:
     except ValueError:
         return str(res)
     return f"{w // 1024}K" if w >= 1024 and w % 1024 == 0 else str(w)
+
+
+class StarButton(QPushButton):
+    """The favourite toggle: the style draws the button, the star is painted on top,
+    centred on the button whatever the style, its bevel and the screen scale."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent, objectName="flat", checkable=True)
+        self.outline = QColor("#999999")
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)                         # bevel / hover / press, no icon
+        from .delegate import FAVOURITE, star_path
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        side = min(self.width(), self.height()) * 0.62
+        r = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
+        if self.isDown():
+            r.translate(0.5, 0.5)
+        path = star_path(r)
+        if self.isChecked():
+            p.setPen(QPen(FAVOURITE.darker(150), 1.0))
+            p.setBrush(FAVOURITE)
+        else:
+            p.setPen(QPen(self.outline, 1.3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+        p.end()
 
 
 class DetailPanel(QWidget):
@@ -144,10 +173,9 @@ class DetailPanel(QWidget):
         bl = QVBoxLayout(body)
         bl.setContentsMargins(12, 10, 12, 12)
         bl.setSpacing(6)
-        self.fav_btn = QPushButton(objectName="flat", checkable=True)
+        self.fav_btn = StarButton()
         self.fav_btn.setProperty("squareTool", True)
         self.fav_btn.setFixedSize(22, 22)
-        self.fav_btn.setIconSize(QSize(16, 16))
         self.fav_btn.setCursor(Qt.PointingHandCursor)
         self.fav_btn.setVisible(False)                   # the gallery shows it when favourites are on
         self.fav_btn.toggled.connect(self._on_fav_toggled)
@@ -352,10 +380,10 @@ class DetailPanel(QWidget):
             self.favouriteToggled.emit(self.item, on)
 
     def _update_fav_icon(self) -> None:
-        from .delegate import star_icon
         on = self.fav_btn.isChecked()
-        self.fav_btn.setIcon(star_icon(on, self._theme.c("muted")))
+        self.fav_btn.outline = self._theme.c("muted")
         self.fav_btn.setToolTip("Remove from Favourites" if on else "Add to Favourites")
+        self.fav_btn.update()
 
     _copy_needs_paths = False
 
